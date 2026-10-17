@@ -16,6 +16,7 @@ import lrclib
 import effects
 import moreeffects
 import partyeffects
+import clubeffects
 from spotify import Spotify, RateLimited
 
 # Lines appear this much before their timestamp; Spotify's reported position trails the audio
@@ -249,8 +250,8 @@ def show(image):
 
 
 # Cycled through one per song
-# Newest first, then the redesigned Earth, then the rest
-ALL_EFFECTS = (partyeffects.EFFECTS + [moreeffects.Earth]
+# Newest first (club, then party), then the redesigned Earth, then the rest
+ALL_EFFECTS = (clubeffects.EFFECTS + partyeffects.EFFECTS + [moreeffects.Earth]
                + [e for e in moreeffects.EFFECTS if e is not moreeffects.Earth] + effects.EFFECTS)
 
 

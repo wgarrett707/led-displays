@@ -5,8 +5,9 @@ Shows synced lyrics for whatever is playing on Spotify, line by line, in time wi
 - `lyrics.py` - the display program (polls Spotify, picks the current line, drives the matrix)
 - `spotify.py` - Spotify Web API: token refresh and current playback
 - `lrclib.py` - looks up synced lyrics on [LRCLib](https://lrclib.net) and caches them in `cache/`
-- `layout.py` - renders lines in one font size (6x11 at 16): one line, or two balanced lines;
-  the rare line too long for two scrolls sideways
+- `layout.py` - lays out lines in one font size (6x11 at 16): one line, or two balanced lines;
+  the rare line too long for two scrolls sideways. Produces text masks for the effects.
+- `effects.py`, `moreeffects.py`, `partyeffects.py`, `clubeffects.py` - the animated effects
 - `spotify_auth.py` - one-time Spotify login, run on a PC (not the Pi)
 
 ## Setup
@@ -23,9 +24,36 @@ The matrix can only be driven by one program, so stop the hub first:
 
 ```
 sudo systemctl stop ledhub
-sudo python3 /home/pi/led-scripts/lyrics/lyrics.py      # LYRICS_DEBUG=1 logs every screen change
+sudo python3 /home/pi/led-scripts/lyrics/lyrics.py
 sudo systemctl start ledhub
 ```
+
+Options (environment variables; note `sudo VAR=value python3 ...`):
+- `LYRICS_EFFECT=Fire` - use one effect for every song instead of cycling
+- `LYRICS_DEBUG=1` - log every screen change with the song position
+
+## Effects
+
+One effect per song, cycling in this order (the effect's name shows after the artist on the
+song info screen). All run at ~43 fps; each frame costs 3-13 ms of CPU on the Pi 3B+.
+
+- Club: Strobe, Bass Drop, Shockwave, Rave, Laser Fan, LED Wall, Crowd, Sirens, Glow Sticks, Pulse
+- Party: Confetti, Club Lights, Meteors, Embers, Inferno, Warp Tunnel, City Storm, Electric,
+  Particles, Mirror EQ, Bubbles
+- Earth (orbit view; its 0.25-degree surface is built once and cached in `cache/earth-v1.npz`)
+- Wave, Lasers, Matrix, Fireworks, Synthwave, Disco, Storm, Bounce, Aurora, Pac-Man
+- Rainbow, Neon, Fire, Karaoke, Plasma, Glitch, Hyperspace, Equalizer
+
+Beat-synced effects assume 120 BPM (Spotify no longer gives new apps tempo data).
+
+**Flashing:** Strobe, Bass Drop's snare roll and Sirens flash at 4 Hz or more, which can trigger
+seizures in people with photosensitive epilepsy. `STROBE_FLASHES_PER_BEAT` in `clubeffects.py` sets
+the strobe rate (2 = 4 flashes a second at 120 BPM).
+
+Effects get the text as an `effects.Text` (mask, black outline ring, per-pixel shade, line boxes)
+and return one 32x256 RGB frame per call; see `effects.Effect` and `effects.paint`. On the Pi 3,
+whole-frame numpy operations cost ~0.3-1.5 ms each, so effects avoid masked gathers/scatters, use
+cached per-line weights, and batch particle drawing (`moreeffects.additive`).
 
 ## Behaviour
 
