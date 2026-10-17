@@ -2,12 +2,10 @@
 import json
 KEYS = json.load(open('/home/pi/led-scripts/apikeys.json'))
 from PIL import Image, ImageDraw, ImageFont
-from datetime import datetime, time
+from datetime import datetime, date, timedelta
 import time
 import requests
 import finnhub
-import pandas as pd
-import pandas_market_calendars as mcal
 import ledpackage as lp
 import os
 
@@ -32,10 +30,8 @@ configuration = finnhub.Configuration(
 )
 
 finnhub_client = finnhub.DefaultApi(finnhub.ApiClient(configuration))
-nyse = mcal.get_calendar('NYSE')
 index = 0
 closeCycled = False
-lp.localPID('stocks', str(os.getpid()))
 
 def resetReady():
     # This script simply resets the 'Ready.txt' file so no errors occur later on
@@ -46,19 +42,80 @@ def resetReady():
 
 def checkReady():
     # This function checks to see when the other script is ready to continue.
-    file = open(FULL_PATH + '/Ready.txt', 'r')
-    content = file.read()
-    file.close()
-    if content == '1':
-        print('Photo generator recognizes scroller\'s ready status.')
-        resetReady()
-    else:
+    # (A loop rather than recursion, which hit Python's recursion limit on long waits.)
+    while True:
+        file = open(FULL_PATH + '/Ready.txt', 'r')
+        content = file.read()
+        file.close()
+        if content == '1':
+            print('Photo generator recognizes scroller\'s ready status.')
+            resetReady()
+            return
         time.sleep(0.5)
-        checkReady()
-        
+
+def nthWeekday(year, month, weekday, n):
+    # n-th given weekday (Mon=0) of a month; n=-1 means the last one
+    if n > 0:
+        first = date(year, month, 1)
+        return first + timedelta(days=(weekday - first.weekday()) % 7 + 7 * (n - 1))
+    last = date(year, month + 1, 1) - timedelta(days=1)
+    return last - timedelta(days=(last.weekday() - weekday) % 7)
+
+def observed(day):
+    # Holidays on a Saturday are observed Friday, on a Sunday the following Monday
+    if day.weekday() == 5:
+        return day - timedelta(days=1)
+    if day.weekday() == 6:
+        return day + timedelta(days=1)
+    return day
+
+def easter(year):
+    a, b, c = year % 19, year // 100, year % 100
+    d, e = b // 4, b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = c // 4, c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    return date(year, month, (h + l - 7 * m + 114) % 31 + 1)
+
+def nyseHolidays(year):
+    # Regular NYSE full-day closures (replaces pandas_market_calendars, which took ~13 s to import)
+    holidays = {nthWeekday(year, 1, 0, 3),               # Martin Luther King Jr. Day
+                nthWeekday(year, 2, 0, 3),               # Washington's Birthday
+                easter(year) - timedelta(days=2),        # Good Friday
+                nthWeekday(year, 5, 0, -1),              # Memorial Day
+                observed(date(year, 6, 19)),             # Juneteenth
+                observed(date(year, 7, 4)),              # Independence Day
+                nthWeekday(year, 9, 0, 1),               # Labor Day
+                nthWeekday(year, 11, 3, 4),              # Thanksgiving
+                observed(date(year, 12, 25))}            # Christmas
+    # New Year's Day on a Saturday is not observed on the Friday before
+    newYear = date(year, 1, 1)
+    if newYear.weekday() != 5:
+        holidays.add(observed(newYear))
+    return holidays
+
+def isTradingDay(day):
+    return day.weekday() < 5 and day not in nyseHolidays(day.year)
+
+def fetchQuote(symbol):
+    # Returns the quote, or None if the request failed (the old image is kept)
+    try:
+        return finnhub_client.quote(symbol, _request_timeout=10)
+    except finnhub.ApiException as e:
+        print('Finnhub error for ' + symbol + ': ' + str(e.status) + ' ' + str(e.reason))
+        if e.status == 429:
+            print('Rate limited, waiting 60 seconds.')
+            time.sleep(60)
+    except Exception as e:
+        print('Request failed for ' + symbol + ': ' + repr(e))
+        time.sleep(5)
+    return None
 
 def isMarketOpen():
-    global nyse
     # In this function, the first value returned specifies if the market is open or not.
     # The second value returned specifies if the status of the market being open or
     # closed is going to change soon (ex. at 2 PM or later, the market will be within
@@ -68,9 +125,7 @@ def isMarketOpen():
     currentDate = currentDT.strftime('%Y-%m-%d')
     print(currentDate)
     # Checks if it is a valid trading day (not a weekend or holiday)
-    validDays = nyse.valid_days(start_date=currentDate, end_date=currentDate)
-    print(validDays)
-    if currentDate in str(validDays):
+    if isTradingDay(currentDT.date()):
         currentHour = int(currentDT.strftime('%H'))
         print(currentHour)
         # Checks if the hour is between 8 AM and 3 PM (approximate market hours in CST)
@@ -98,11 +153,16 @@ def isMarketOpen():
         print('Closed. Market is not open today.')
         return False, False
 
-   
+
+# Reset Ready.txt before recording the PID: the scroller waits on the PID and then marks
+# itself ready, so resetting after that could wipe out its ready status.
+resetReady()
+lp.localPID('stocks', str(os.getpid()))
+# The first pass starts right away so fresh prices replace last session's images.
+firstPass = True
+
 while True:
     while True:
-        # Reset the Ready.txt file first, otherwise it might clear the other script's ready status
-        resetReady()
         # See the note I made at the top of the mentioned function
         marketOpen = isMarketOpen()
         # If the market is open, reset the closeCycled variable
@@ -124,13 +184,18 @@ while True:
                 break
         print(marketOpen)
         cycles = 0
-        checkReady()
+        if not firstPass:
+            checkReady()
+        firstPass = False
 
         # The following code is the loop that creates images for each stock
         while True:
             if index <= len(stockSymbols) - 1:
                 selectedSymbol = stockSymbols[index]
-                stockQuote = finnhub_client.quote(selectedSymbol)
+                stockQuote = fetchQuote(selectedSymbol)
+                if stockQuote is None:
+                    index += 1
+                    continue
                 print(stockQuote)
                 symbolPrice = str(format(stockQuote.c, '.2f'))
                 try:
@@ -175,7 +240,9 @@ while True:
             
                 img = img.crop((0, 3, logoWidth + priceWidth + changeWidth + 19, 35))
                 fileName = FULL_PATH + "/displays/" + selectedSymbol + ".png"
-                img.save(fileName)
+                # Write to a temp file and rename, so the scroller never reads a half-written PNG
+                img.save(fileName + '.tmp', format='PNG')
+                os.replace(fileName + '.tmp', fileName)
                 imgWidth, imgHeight = img.size
                 waitTime = imgWidth * 0.005
                 print(str(imgWidth) + " pixels wide image. Waiting " + str(waitTime) + " seconds.")

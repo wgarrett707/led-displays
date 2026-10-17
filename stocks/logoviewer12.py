@@ -1,6 +1,7 @@
 #!/usr/bin/env python3.7
 import time
 import os
+import gc
 import ledpackage as lp
 from rgbmatrix import RGBMatrix, RGBMatrixOptions
 from samplebase import SampleBase
@@ -45,23 +46,37 @@ loading = Image.open(FULL_PATH + "/loading.png").convert('RGB')
 matrixCanvas.SetImage(loading)
 matrixCanvas = matrix.SwapOnVSync(matrixCanvas)
 
-print("Starting LEDs in about 20 seconds...")
+# Seconds per 1-pixel scroll step (about 62 px/s). Lower is faster.
+FRAME_TIME = 0.016
 
-time.sleep(10)
+def loadDisplay(symbol):
+    # Returns the symbol's image, or None if it is missing or unreadable after a few tries
+    for attempt in range(3):
+        try:
+            return Image.open(FULL_PATH + "/displays/" + symbol + ".png").convert('RGB')
+        except Exception as e:
+            print("Couldn't load " + symbol + " (" + repr(e) + "), retrying.")
+            time.sleep(0.1)
+    return None
 
+# The loading screen stays up until the generator has recorded its PID (recordPID waits for it).
 lp.recordPID('stocks', str(os.getpid()))
 markReady()
-print('Scroller is ready to begin in 10 seconds.')
+print('Scroller is ready.')
 
-time.sleep(10)
-        
 #Making a canvas big enough to fit what the matrix panels will show along with space outside of the matrix panels where images will be prepared
 canvas = Image.new('RGB', (600, 32), (0, 0, 0))
+img_width = 0
+
+# Garbage collection pauses cause visible hitches, so it only runs between logos.
+gc.disable()
+nextFrame = time.monotonic()
 
 while True:
-    # The canvas does not need to be shifted if it is the first display being shown
-    if index != 0:
+    # Shift out the display that just finished scrolling (nothing to shift before the first one)
+    if img_width:
         canvas = ImageChops.offset(canvas, xoffset=-img_width, yoffset=0)
+        img_width = 0
     # This resets the 'index' variable back to 0 after showing all of the stocks in the list
     if index >= len(stockSymbols):
         index = 0
@@ -69,12 +84,11 @@ while True:
     if index == len(stockSymbols) - 5:
         markReady()
         print('Scroller is at the fifth-to-last logo and has marked that it is ready.')
-    try:
-        imageElement = Image.open(FULL_PATH + "/displays/" + stockSymbols[index] + ".png").convert('RGB')
-    except:
-        print("Image file not there, waiting.")
-        time.sleep(0.1)
-        imageElement = Image.open(FULL_PATH + "/displays/" + stockSymbols[index] + ".png").convert('RGB')
+    imageElement = loadDisplay(stockSymbols[index])
+    if imageElement is None:
+        index += 1
+        continue
+    gc.collect()
     img_width, img_height = imageElement.size
     canvas.paste(imageElement, (250, 0))
     xpos = -1
@@ -85,7 +99,15 @@ while True:
         matrixCanvas.SetImage(canvas, xpos - 250 + LEDworkspace)
 
         matrixCanvas = matrix.SwapOnVSync(matrixCanvas)
-        time.sleep(0.01)
+
+        # Sleep until the next frame is due, so every step takes the same time
+        nextFrame += FRAME_TIME
+        delay = nextFrame - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+        elif delay < -FRAME_TIME:
+            # Fell well behind (e.g. CPU throttled); resync instead of rushing to catch up
+            nextFrame = time.monotonic()
 
         xpos = xpos - 1
     index += 1
