@@ -15,3 +15,8 @@ stocks/Ready.txt
 stocks/StockNumber.txt
 stocks/displays/
 news/displays/
+
+# Lyrics runtime data
+lyrics/cache/
+lyrics/spotify_token.json
+hub/lyrics.txt
