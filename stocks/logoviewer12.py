@@ -46,8 +46,18 @@ loading = Image.open(FULL_PATH + "/loading.png").convert('RGB')
 matrixCanvas.SetImage(loading)
 matrixCanvas = matrix.SwapOnVSync(matrixCanvas)
 
-# Seconds per 1-pixel scroll step (about 62 px/s). Lower is faster.
+# Target seconds per 1-pixel scroll step (about 62 px/s). Lower is faster.
+# The actual step is a whole number of panel refreshes, so every step takes exactly the same time.
 FRAME_TIME = 0.016
+
+def measureRefresh(image, frames=60):
+    # Times SwapOnVSync, which returns once per panel refresh, to find the refresh period
+    global matrixCanvas
+    start = time.monotonic()
+    for _ in range(frames):
+        matrixCanvas.SetImage(image)
+        matrixCanvas = matrix.SwapOnVSync(matrixCanvas)
+    return (time.monotonic() - start) / frames
 
 def loadDisplay(symbol):
     # Returns the symbol's image, or None if it is missing or unreadable after a few tries
@@ -58,6 +68,11 @@ def loadDisplay(symbol):
             print("Couldn't load " + symbol + " (" + repr(e) + "), retrying.")
             time.sleep(0.1)
     return None
+
+refreshPeriod = measureRefresh(loading)
+swapsPerStep = max(1, round(FRAME_TIME / refreshPeriod))
+print('Panel refresh %.2f ms, %d refreshes per step (%.1f px/s)'
+      % (refreshPeriod * 1000, swapsPerStep, 1 / (refreshPeriod * swapsPerStep)))
 
 # The loading screen stays up until the generator has recorded its PID (recordPID waits for it).
 lp.recordPID('stocks', str(os.getpid()))
@@ -70,7 +85,6 @@ img_width = 0
 
 # Garbage collection pauses cause visible hitches, so it only runs between logos.
 gc.disable()
-nextFrame = time.monotonic()
 
 while True:
     # Shift out the display that just finished scrolling (nothing to shift before the first one)
@@ -96,18 +110,11 @@ while True:
         if (xpos < -img_width):
             break
 
-        matrixCanvas.SetImage(canvas, xpos - 250 + LEDworkspace)
-
-        matrixCanvas = matrix.SwapOnVSync(matrixCanvas)
-
-        # Sleep until the next frame is due, so every step takes the same time
-        nextFrame += FRAME_TIME
-        delay = nextFrame - time.monotonic()
-        if delay > 0:
-            time.sleep(delay)
-        elif delay < -FRAME_TIME:
-            # Fell well behind (e.g. CPU throttled); resync instead of rushing to catch up
-            nextFrame = time.monotonic()
+        # Hold each position for the same number of refreshes. SwapOnVSync hands back the
+        # other buffer, which still has the previous position, so it is redrawn every swap.
+        for _ in range(swapsPerStep):
+            matrixCanvas.SetImage(canvas, xpos - 250 + LEDworkspace)
+            matrixCanvas = matrix.SwapOnVSync(matrixCanvas)
 
         xpos = xpos - 1
     index += 1
