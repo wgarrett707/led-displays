@@ -12,7 +12,7 @@ Shows synced lyrics for whatever is playing on Spotify, line by line, in time wi
 ## Setup
 
 1. Create an app at <https://developer.spotify.com/dashboard> (the account needs Spotify Premium).
-   Add the Redirect URI `http://127.0.0.1:8888/callback` and select "Web API".
+   Add the Redirect URI `http://127.0.0.1:8765/callback` and select "Web API".
 2. On a PC with SSH access to the Pi, run `python spotify_auth.py` and enter the app's Client ID and
    Client Secret. It opens the Spotify login, then saves `spotify_client_id`,
    `spotify_client_secret` and `spotify_refresh_token` into `apikeys.json` on the Pi.

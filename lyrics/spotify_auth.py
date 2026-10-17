@@ -21,7 +21,9 @@ import urllib.request
 import webbrowser
 
 PI = 'pi@10.0.0.146'
-REDIRECT_URI = 'http://127.0.0.1:8888/callback'
+# Not 8888: Jupyter and VS Code commonly hold that port
+PORT = 8765
+REDIRECT_URI = 'http://127.0.0.1:%d/callback' % PORT
 SCOPES = 'user-read-currently-playing user-read-playback-state'
 
 # Runs on the Pi: merges the JSON from stdin into apikeys.json (kept private to the pi user)
@@ -78,7 +80,11 @@ def main():
         def log_message(self, *args):
             pass
 
-    server = http.server.HTTPServer(('127.0.0.1', 8888), Callback)
+    try:
+        server = http.server.HTTPServer(('127.0.0.1', PORT), Callback)
+    except OSError as e:
+        sys.exit('Port %d is in use by another program (%s). Close it, or change PORT in this script '
+                 'and the Redirect URI in your Spotify app to match.' % (PORT, e))
     url = 'https://accounts.spotify.com/authorize?' + urllib.parse.urlencode({
         'client_id': clientId, 'response_type': 'code', 'redirect_uri': REDIRECT_URI,
         'scope': SCOPES, 'state': state})
