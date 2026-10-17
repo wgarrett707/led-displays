@@ -5,8 +5,8 @@ Shows synced lyrics for whatever is playing on Spotify, line by line, in time wi
 - `lyrics.py` - the display program (polls Spotify, picks the current line, drives the matrix)
 - `spotify.py` - Spotify Web API: token refresh and current playback
 - `lrclib.py` - looks up synced lyrics on [LRCLib](https://lrclib.net) and caches them in `cache/`
-- `layout.py` - renders lines: the largest of 1 big / 1 medium / 2 medium / 2 small / 3 small lines
-  that fits, centred; anything longer scrolls
+- `layout.py` - renders lines in one font size (6x11 at 16): one line, or two balanced lines;
+  the rare line too long for two scrolls sideways
 - `spotify_auth.py` - one-time Spotify login, run on a PC (not the Pi)
 
 ## Setup

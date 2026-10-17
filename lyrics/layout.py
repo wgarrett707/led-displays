@@ -1,140 +1,113 @@
 # Renders lyric lines and status screens as 256x32 images for the LED matrix.
+# Everything uses one font size: up to two lines of 6x11 at size 16 (about 41 characters each).
 import unicodedata
 from PIL import Image, ImageDraw, ImageFont
 from lrclib import cleanTitle
 
 WIDTH, HEIGHT = 256, 32
 MARGIN = 2
-
-FONT_DIR = '/home/pi/led-scripts/lyrics/fonts/'
-BIG = ImageFont.truetype(FONT_DIR + '6x11.ttf', size=22)
-MEDIUM = ImageFont.truetype(FONT_DIR + '6x11.ttf', size=16)
-SMALL = ImageFont.truetype(FONT_DIR + 'm5x7.ttf', size=16)
+FONT = ImageFont.truetype('/home/pi/led-scripts/lyrics/fonts/6x11.ttf', size=16)
+# Two lines 16 px apart fill the 32-px panel
+LINE_SPACING = 16
 
 WHITE = (255, 255, 255)
 GREY = (140, 140, 140)
 DIM = (70, 70, 70)
 
-# The pixel fonts only cover ASCII well, so typographic characters are mapped to plain ones
+# The pixel font only covers ASCII well, so typographic characters are mapped to plain ones
 REPLACEMENTS = {'‘': "'", '’': "'", '‚': "'", '“': '"', '”': '"',
                 '„': '"', '–': '-', '—': '-', '…': '...', ' ': ' '}
 
 _measure = ImageDraw.Draw(Image.new('RGB', (1, 1)))
+_widths = {}
 
 
 def toAscii(text):
-    # Strips accents (é -> e) and drops anything the fonts can't draw (e.g. CJK)
+    # Strips accents (é -> e) and drops anything the font can't draw (e.g. CJK)
     text = ''.join(REPLACEMENTS.get(c, c) for c in text)
     text = unicodedata.normalize('NFKD', text)
     return ' '.join(''.join(c for c in text if ord(c) < 128).split())
 
 
-_widths = {}
-
-
-def width(text, font):
+def width(text):
     # Memoized: wrapping measures the same fragments many times
-    key = (text, id(font))
-    if key not in _widths:
+    if text not in _widths:
         if len(_widths) > 20000:
             _widths.clear()
-        _widths[key] = _measure.textsize(text, font=font)[0]
-    return _widths[key]
+        _widths[text] = _measure.textsize(text, font=FONT)[0]
+    return _widths[text]
 
 
-def lineHeight(font):
-    ascent, descent = font.getmetrics()
-    return ascent + descent
+def fits(text):
+    return width(text) <= WIDTH - 2 * MARGIN
 
 
-def wrap(text, font, lines):
-    # Splits text into at most 'lines' lines that each fit the panel, as evenly as possible.
-    # Returns None if it can't fit.
+def wrap(text):
+    # One line if it fits, else the most even split into two lines that fit; None if neither works
+    if fits(text):
+        return [text]
     words = text.split()
-    maxWidth = WIDTH - 2 * MARGIN
-    if lines == 1:
-        return [text] if width(text, font) <= maxWidth else None
     best = None
     for i in range(1, len(words)):
-        first = ' '.join(words[:i])
-        if width(first, font) > maxWidth:
+        first, second = ' '.join(words[:i]), ' '.join(words[i:])
+        if not fits(first):
             break
-        rest = wrap(' '.join(words[i:]), font, lines - 1)
-        if rest is None:
-            continue
-        widest = max(width(l, font) for l in [first] + rest)
-        if best is None or widest < best[0]:
-            best = (widest, [first] + rest)
+        if fits(second):
+            widest = max(width(first), width(second))
+            if best is None or widest < best[0]:
+                best = (widest, [first, second])
     return best[1] if best else None
 
 
-# Font and line count to try, largest first, with the vertical distance between lines
-LAYOUTS = [(BIG, 1, 0), (MEDIUM, 1, 0), (MEDIUM, 2, 16), (SMALL, 2, 14), (SMALL, 3, 10)]
+def newImage(size=(WIDTH, HEIGHT)):
+    img = Image.new('RGB', size)
+    draw = ImageDraw.Draw(img)
+    draw.fontmode = '1'
+    return img, draw
 
 
-def drawLines(draw, lines, font, spacing, color, top=None):
+def drawLines(draw, lines, colors):
     # Centres each line horizontally and the block vertically
-    if top is None:
-        block = lineHeight(font) + spacing * (len(lines) - 1)
-        top = (HEIGHT - block) // 2
-    for i, line in enumerate(lines):
-        x = (WIDTH - width(line, font)) // 2
-        draw.text((x, top + i * spacing), line, font=font, fill=color)
+    ascent, descent = FONT.getmetrics()
+    top = (HEIGHT - (ascent + descent) - LINE_SPACING * (len(lines) - 1)) // 2
+    for i, (line, color) in enumerate(zip(lines, colors)):
+        draw.text(((WIDTH - width(line)) // 2, top + i * LINE_SPACING), line, font=FONT, fill=color)
 
 
 def lyric(text, color=WHITE):
-    # Returns (image, None) if the line fits, or (wide image, None) for horizontal scrolling
+    # Returns (image, None) if the line fits on the panel, or (None, wide image) to scroll across
     text = toAscii(text)
-    img = Image.new('RGB', (WIDTH, HEIGHT))
-    draw = ImageDraw.Draw(img)
-    draw.fontmode = '1'
-    for font, count, spacing in LAYOUTS:
-        lines = wrap(text, font, count)
-        if lines:
-            drawLines(draw, lines, font, spacing, color)
-            return img, None
-    # Too long even for three small lines: render one wide line to scroll across
-    wide = Image.new('RGB', (width(text, MEDIUM) + 2 * MARGIN, HEIGHT))
-    d = ImageDraw.Draw(wide)
-    d.fontmode = '1'
-    d.text((MARGIN, (HEIGHT - lineHeight(MEDIUM)) // 2), text, font=MEDIUM, fill=color)
+    lines = wrap(text)
+    if lines:
+        img, draw = newImage()
+        drawLines(draw, lines, [color] * len(lines))
+        return img, None
+    # Too long for two lines (very rare): one wide line, scrolled across while it's sung
+    ascent, descent = FONT.getmetrics()
+    wide, draw = newImage((width(text) + 2 * MARGIN, HEIGHT))
+    draw.text((MARGIN, (HEIGHT - ascent - descent) // 2), text, font=FONT, fill=color)
     return None, wide
 
 
-def fitOne(text, fonts):
-    # First font in which text fits on one line; shortens with '...' as a last resort
-    for font in fonts:
-        if width(text, font) <= WIDTH - 2 * MARGIN:
-            return text, font
-    font = fonts[-1]
-    while text and width(text + '...', font) > WIDTH - 2 * MARGIN:
+def shorten(text, suffix=''):
+    # Trims text with '...' until text + suffix fits on one line
+    if fits(text + suffix):
+        return text + suffix
+    while text and not fits(text + '...' + suffix):
         text = text[:-1]
-    return text.rstrip() + '...', font
+    return text.rstrip(' ,') + '...' + suffix
 
 
 def songInfo(title, artist, note=None, dim=False):
-    # Title on top, artist (and an optional status note) underneath
-    img = Image.new('RGB', (WIDTH, HEIGHT))
-    draw = ImageDraw.Draw(img)
-    draw.fontmode = '1'
-    title, titleFont = fitOne(toAscii(cleanTitle(title)), [MEDIUM, SMALL])
-    # The note matters more than the end of a long artist list, so the artist gets shortened
-    suffix = '  -  ' + note if note else ''
-    artist = toAscii(artist)
-    if width(artist + suffix, SMALL) > WIDTH - 2 * MARGIN:
-        while artist and width(artist + '...' + suffix, SMALL) > WIDTH - 2 * MARGIN:
-            artist = artist[:-1]
-        artist = artist.rstrip(' ,') + '...'
-    second, secondFont = artist + suffix, SMALL
-    drawLines(draw, [title], titleFont, 0, DIM if dim else WHITE, top=1)
-    drawLines(draw, [second], secondFont, 0, DIM if dim else GREY, top=17)
+    # Title on top, artist (and an optional status note) underneath. The note matters more than
+    # the end of a long artist list, so the artist is what gets shortened.
+    img, draw = newImage()
+    lines = [shorten(toAscii(cleanTitle(title))), shorten(toAscii(artist), '  -  ' + note if note else '')]
+    drawLines(draw, lines, [DIM, DIM] if dim else [WHITE, GREY])
     return img
 
 
 def message(text, color=GREY):
-    img = Image.new('RGB', (WIDTH, HEIGHT))
-    draw = ImageDraw.Draw(img)
-    draw.fontmode = '1'
-    text, font = fitOne(toAscii(text), [MEDIUM, SMALL])
-    drawLines(draw, [text], font, 0, color)
+    img, draw = newImage()
+    drawLines(draw, [shorten(toAscii(text))], [color])
     return img
