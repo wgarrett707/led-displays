@@ -63,13 +63,59 @@ Thanksgiving, Christmas), with weekend observance rules. Checked against the off
 for 2022 and 2025-2027. One-off closures (e.g. national days of mourning) aren't included; on those
 days it just keeps refreshing as if open.
 
-### 7. Uneven scroll speed (scroller)
-Each frame took `SwapOnVSync` time + a fixed `sleep(0.01)` + Python's own work, which varies, so the
-scroll speed wobbled. **Fix:** frames are now scheduled against a fixed clock (`FRAME_TIME = 0.016`,
-about 62 px/s). If the Pi falls well behind, it resyncs instead of speeding up to catch up. Python's
-garbage collector, which can pause unpredictably, now only runs between logos.
+### 7. Jittery scrolling (scroller)
 
-**Tuning:** adjust `FRAME_TIME` at the top of `logoviewer12.py` if the speed differs from before.
+#### How the panel is driven
+The library (`rpi-rgb-led-matrix`, commit `56b87b9` from Jan 2020, installed into
+`/usr/local/lib/python3.7/site-packages/rgbmatrix`) runs a **refresh thread** at real-time priority 99,
+pinned to CPU 3. It redraws the whole panel continuously, about **126 times a second (7.9 ms each,
+measured; very stable)**. There are two frame buffers: one is shown while the script draws into the other.
+`SwapOnVSync(buffer)` hands over the drawn buffer, **blocks until the end of the refresh in progress**,
+and returns the other buffer. `SetImage(image, offset)` writes only the image columns that land on the
+panel; it never clears anything.
+
+#### What caused the jitter (all measured on the panel)
+- **The original loop** did `SetImage`, `SwapOnVSync`, then `sleep(0.01)`. Because the sleep isn't a
+  whole number of refreshes, steps randomly took 2 or 3 refreshes: **60 uneven steps/minute** at idle.
+- **`SetImage` is slow and variable**: 2.2 ms median, 5.7 ms p99, 13 ms worst (8,192 pixels, each through
+  the "coreman" multiplex mapper). Drawing every refresh left ~5 ms of slack, so slow draws made a
+  position stay up one refresh too long.
+- **Logo transitions** took ~21 ms (up to 81 ms): a full garbage collection (16 ms) and reading the
+  next PNG from the SD card (usually 1 ms, up to 66 ms).
+- **The scroller's thread could land on CPU 3**, where the refresh thread always takes priority.
+
+#### Fix
+- **One draw per step, swap timed to the panel:** each position is drawn once, straight after the
+  previous swap, and handed over in the middle of the step's last refresh, so it appears exactly 2
+  refreshes later (15.8 ms per step, ~63 px/s). This leaves ~12 ms of slack instead of ~5. The refresh
+  period is measured at startup while the loading screen shows.
+- **The next logo's file is read on a background thread** while the current one scrolls.
+- **`gc.freeze()` at startup:** collecting between logos now takes ~0 ms instead of 16 ms.
+- **The scroller is pinned to CPUs 0-2.**
+
+#### Result (60 s runs on the real panel with the real images)
+| Version | Idle | Under load (2 busy processes) |
+|---|---|---|
+| Original | 60 glitches/min | — |
+| Drawing every refresh (interim fix) | 26 glitches/min | 62 glitches/min |
+| **Final** | **1.1 glitches/min** | **3.2 glitches/min** |
+
+No steps came early, and the worst glitch is one extra refresh (8 ms).
+
+**Tuning:** `FRAME_TIME` at the top of `logoviewer12.py` picks the step length, rounded to a whole
+number of refreshes: 0.016 gives 2 refreshes (~63 px/s), 0.024 gives 3 (~42 px/s), 0.008 gives 1 (~126 px/s).
+
+### 8. Pixels shifted a pixel or two at the left edge (scroller)
+The scroller drew the canvas at offset `xpos - 250 + 256`, which is positive (5 down to 1) for the
+first 5 steps of every logo. `SetImage` skips columns left of the offset, so panel columns 0-4 kept
+whatever that buffer held from two swaps earlier: pixels 1-2 px behind the rest of the image.
+**Fix:** new logos are pasted at column 255, so the offset is never positive and every frame covers
+all 256 columns.
+
+If shifted pixels still appear **elsewhere** on the panel, or on the hub menu or other programs, the
+likely cause is the GPIO signal timing instead: `gpio_slowdown` is at its default of 1 (fastest), which
+is marginal on a Pi 3 driving 5 V panels from 3.3 V pins. `options.gpio_slowdown = 2` costs only ~5%
+refresh rate (126 Hz to 120 Hz, measured). Under-voltage makes it worse.
 
 ## Not changed (recommendations)
 
@@ -79,8 +125,10 @@ garbage collector, which can pause unpredictably, now only runs between logos.
 - **`isolcpus=3`** in `/boot/cmdline.txt` gives the matrix refresh thread its own core, which is the
   library author's main recommendation against flicker. It's a boot setting and affects every
   program, so back up `cmdline.txt` first.
-- **`options.pwm_bits`** (default 11): lowering to ~8 raises the refresh rate; at brightness 30 the
-  colour loss is hard to see. Compare on the panel.
+- **`options.pwm_bits`**: lowering it from 11 to 8 only raised the refresh rate from 126 Hz to 138 Hz
+  (measured), so it isn't worth the colour loss.
+- **Library upgrade**: newer versions can swap every Nth refresh natively, but the multiplexing
+  numbering changed (coreman is no longer 6), and every program uses this install, so it wasn't upgraded.
 - The hub's Esc handler kills the PIDs in `hub/stocks.txt`. If Esc is pressed before the new scripts
   have recorded their PIDs, it kills stale PIDs instead. Removing the startup sleeps makes that window
   much smaller, but the hub logic itself is unchanged.

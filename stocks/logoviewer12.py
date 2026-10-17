@@ -2,6 +2,8 @@
 import time
 import os
 import gc
+import io
+from concurrent.futures import ThreadPoolExecutor
 import ledpackage as lp
 from rgbmatrix import RGBMatrix, RGBMatrixOptions
 from samplebase import SampleBase
@@ -50,14 +52,30 @@ matrixCanvas = matrix.SwapOnVSync(matrixCanvas)
 # The actual step is a whole number of panel refreshes, so every step takes exactly the same time.
 FRAME_TIME = 0.016
 
-def measureRefresh(image, frames=60):
+def measureRefresh(image, frames=120):
     # Times SwapOnVSync, which returns once per panel refresh, to find the refresh period
     global matrixCanvas
+    matrixCanvas.SetImage(image)
+    matrixCanvas = matrix.SwapOnVSync(matrixCanvas)
     start = time.monotonic()
     for _ in range(frames):
         matrixCanvas.SetImage(image)
         matrixCanvas = matrix.SwapOnVSync(matrixCanvas)
     return (time.monotonic() - start) / frames
+
+def showStep(image, offset):
+    # SwapOnVSync swaps at the end of the refresh in progress, so calling it straight after
+    # the previous swap would show each position for only one refresh. Instead, draw into the
+    # free buffer now (SetImage takes 2-6 ms, occasionally 13), then hand it over in the middle
+    # of this step's last refresh. It then appears exactly swapsPerStep refreshes after the
+    # previous one, with ~12 ms of slack instead of the ~5 ms that drawing every refresh left.
+    global matrixCanvas, lastSwap
+    matrixCanvas.SetImage(image, offset)
+    delay = lastSwap + swapDelay - time.monotonic()
+    if delay > 0:
+        time.sleep(delay)
+    matrixCanvas = matrix.SwapOnVSync(matrixCanvas)
+    lastSwap = time.monotonic()
 
 def loadDisplay(symbol):
     # Returns the symbol's image, or None if it is missing or unreadable after a few tries
@@ -69,8 +87,30 @@ def loadDisplay(symbol):
             time.sleep(0.1)
     return None
 
+def readDisplay(symbol):
+    # Runs on the prefetch thread. SD card reads occasionally stall for 60+ ms, which would
+    # freeze the scroll, so the file is read while the previous logo is still scrolling.
+    with open(FULL_PATH + "/displays/" + symbol + ".png", 'rb') as f:
+        return f.read()
+
+def takeDisplay(symbol, pending):
+    # Decodes the prefetched file (about 1 ms), falling back to a normal load on any error
+    try:
+        return Image.open(io.BytesIO(pending.result())).convert('RGB')
+    except Exception as e:
+        print("Prefetch of " + symbol + " failed (" + repr(e) + ").")
+        return loadDisplay(symbol)
+
+# The refresh thread is pinned to CPU 3 at top real-time priority. If this thread also runs
+# on CPU 3 it has to wait for it and misses frames, so keep it (and the prefetch thread,
+# which inherits this) on the other cores.
+if os.cpu_count() >= 4:
+    os.sched_setaffinity(0, {0, 1, 2})
+prefetcher = ThreadPoolExecutor(max_workers=1)
+
 refreshPeriod = measureRefresh(loading)
 swapsPerStep = max(1, round(FRAME_TIME / refreshPeriod))
+swapDelay = (swapsPerStep - 0.5) * refreshPeriod
 print('Panel refresh %.2f ms, %d refreshes per step (%.1f px/s)'
       % (refreshPeriod * 1000, swapsPerStep, 1 / (refreshPeriod * swapsPerStep)))
 
@@ -80,11 +120,21 @@ markReady()
 print('Scroller is ready.')
 
 #Making a canvas big enough to fit what the matrix panels will show along with space outside of the matrix panels where images will be prepared
-canvas = Image.new('RGB', (600, 32), (0, 0, 0))
+canvas = Image.new('RGB', (LEDworkspace + 400, 32), (0, 0, 0))
 img_width = 0
+# New logos go just past the right edge of the visible area. SetImage only writes the canvas
+# columns that land on the panel, so the canvas must always cover all 256 columns; otherwise
+# the uncovered columns keep stale pixels from an older frame (they showed 1-2 px out of place).
+ENTRY_X = LEDworkspace - 1
 
-# Garbage collection pauses cause visible hitches, so it only runs between logos.
+# Garbage collection: a full collection took ~16 ms (two scroll steps). Freezing everything
+# allocated during startup leaves almost nothing to scan, so collecting between logos is ~0 ms.
+gc.collect()
+gc.freeze()
 gc.disable()
+
+pending = prefetcher.submit(readDisplay, stockSymbols[index])
+lastSwap = time.monotonic()
 
 while True:
     # Shift out the display that just finished scrolling (nothing to shift before the first one)
@@ -98,23 +148,25 @@ while True:
     if index == len(stockSymbols) - 5:
         markReady()
         print('Scroller is at the fifth-to-last logo and has marked that it is ready.')
-    imageElement = loadDisplay(stockSymbols[index])
+    imageElement = takeDisplay(stockSymbols[index], pending)
+    # Start reading the next logo while this one scrolls
+    pending = prefetcher.submit(readDisplay, stockSymbols[(index + 1) % len(stockSymbols)])
     if imageElement is None:
         index += 1
         continue
     gc.collect()
     img_width, img_height = imageElement.size
-    canvas.paste(imageElement, (250, 0))
+    if ENTRY_X + img_width > canvas.size[0]:
+        wider = Image.new('RGB', (ENTRY_X + img_width, 32), (0, 0, 0))
+        wider.paste(canvas, (0, 0))
+        canvas = wider
+    canvas.paste(imageElement, (ENTRY_X, 0))
     xpos = -1
     while True:
         if (xpos < -img_width):
             break
 
-        # Hold each position for the same number of refreshes. SwapOnVSync hands back the
-        # other buffer, which still has the previous position, so it is redrawn every swap.
-        for _ in range(swapsPerStep):
-            matrixCanvas.SetImage(canvas, xpos - 250 + LEDworkspace)
-            matrixCanvas = matrix.SwapOnVSync(matrixCanvas)
+        showStep(canvas, xpos - ENTRY_X + LEDworkspace)
 
         xpos = xpos - 1
     index += 1
