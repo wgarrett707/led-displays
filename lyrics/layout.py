@@ -1,5 +1,6 @@
-# Renders lyric lines and status screens as 256x32 images for the LED matrix.
+# Lays out lyric lines and status screens for the 256x32 LED matrix.
 # Everything uses one font size: up to two lines of 6x11 at size 16 (about 41 characters each).
+# Text comes out as masks (where the letters are) plus line boxes, so effects can colour it.
 import unicodedata
 from PIL import Image, ImageDraw, ImageFont
 from lrclib import cleanTitle
@@ -10,15 +11,17 @@ FONT = ImageFont.truetype('/home/pi/led-scripts/lyrics/fonts/6x11.ttf', size=16)
 # Two lines 16 px apart fill the 32-px panel
 LINE_SPACING = 16
 
-WHITE = (255, 255, 255)
 GREY = (140, 140, 140)
 DIM = (70, 70, 70)
+# Text brightness: lyrics and titles full, the artist line dimmer; much dimmer between lines
+SHADE_TITLE, SHADE_ARTIST = 1.0, 0.55
+SHADE_DIM_TITLE, SHADE_DIM_ARTIST = 0.4, 0.3
 
 # The pixel font only covers ASCII well, so typographic characters are mapped to plain ones
 REPLACEMENTS = {'‘': "'", '’': "'", '‚': "'", '“': '"', '”': '"',
                 '„': '"', '–': '-', '—': '-', '…': '...', ' ': ' '}
 
-_measure = ImageDraw.Draw(Image.new('RGB', (1, 1)))
+_measure = ImageDraw.Draw(Image.new('L', (1, 1)))
 _widths = {}
 
 
@@ -59,34 +62,39 @@ def wrap(text):
     return best[1] if best else None
 
 
-def newImage(size=(WIDTH, HEIGHT)):
-    img = Image.new('RGB', size)
-    draw = ImageDraw.Draw(img)
-    draw.fontmode = '1'
-    return img, draw
-
-
-def drawLines(draw, lines, colors):
-    # Centres each line horizontally and the block vertically
+def _top(count):
     ascent, descent = FONT.getmetrics()
-    top = (HEIGHT - (ascent + descent) - LINE_SPACING * (len(lines) - 1)) // 2
-    for i, (line, color) in enumerate(zip(lines, colors)):
-        draw.text(((WIDTH - width(line)) // 2, top + i * LINE_SPACING), line, font=FONT, fill=color)
+    return (HEIGHT - (ascent + descent) - LINE_SPACING * (count - 1)) // 2
 
 
-def lyric(text, color=WHITE):
-    # Returns (image, None) if the line fits on the panel, or (None, wide image) to scroll across
+def textMask(lines, shades):
+    # Centred lines as a mask, plus one box per line: (x0, y0, x1, y1, shade, string)
+    mask = Image.new('L', (WIDTH, HEIGHT))
+    draw = ImageDraw.Draw(mask)
+    draw.fontmode = '1'
+    top = _top(len(lines))
+    boxes = []
+    for i, (line, shade) in enumerate(zip(lines, shades)):
+        x, y = (WIDTH - width(line)) // 2, top + i * LINE_SPACING
+        draw.text((x, y), line, font=FONT, fill=255)
+        boxes.append((x, max(0, y), x + width(line), min(HEIGHT, y + LINE_SPACING), shade, line))
+    return mask, boxes
+
+
+def lyric(text):
+    # Returns (mask, boxes, False) if the line fits on the panel, or (wide mask, boxes, True)
+    # for the very rare line too long for two lines, which scrolls across while it's sung
     text = toAscii(text)
     lines = wrap(text)
     if lines:
-        img, draw = newImage()
-        drawLines(draw, lines, [color] * len(lines))
-        return img, None
-    # Too long for two lines (very rare): one wide line, scrolled across while it's sung
-    ascent, descent = FONT.getmetrics()
-    wide, draw = newImage((width(text) + 2 * MARGIN, HEIGHT))
-    draw.text((MARGIN, (HEIGHT - ascent - descent) // 2), text, font=FONT, fill=color)
-    return None, wide
+        mask, boxes = textMask(lines, [1.0] * len(lines))
+        return mask, boxes, False
+    mask = Image.new('L', (width(text) + 2 * MARGIN, HEIGHT))
+    draw = ImageDraw.Draw(mask)
+    draw.fontmode = '1'
+    y = _top(1)
+    draw.text((MARGIN, y), text, font=FONT, fill=255)
+    return mask, [(MARGIN, max(0, y), MARGIN + width(text), min(HEIGHT, y + LINE_SPACING), 1.0, text)], True
 
 
 def shorten(text, suffix=''):
@@ -99,15 +107,17 @@ def shorten(text, suffix=''):
 
 
 def songInfo(title, artist, note=None, dim=False):
-    # Title on top, artist (and an optional status note) underneath. The note matters more than
-    # the end of a long artist list, so the artist is what gets shortened.
-    img, draw = newImage()
+    # Title on top, artist (and an optional note) underneath, as a mask. The note matters more
+    # than the end of a long artist list, so the artist is what gets shortened.
     lines = [shorten(toAscii(cleanTitle(title))), shorten(toAscii(artist), '  -  ' + note if note else '')]
-    drawLines(draw, lines, [DIM, DIM] if dim else [WHITE, GREY])
-    return img
+    return textMask(lines, [SHADE_DIM_TITLE, SHADE_DIM_ARTIST] if dim else [SHADE_TITLE, SHADE_ARTIST])
 
 
 def message(text, color=GREY):
-    img, draw = newImage()
-    drawLines(draw, [shorten(toAscii(text))], [color])
+    # A plain one-line status screen (no effects), as an RGB image
+    img = Image.new('RGB', (WIDTH, HEIGHT))
+    draw = ImageDraw.Draw(img)
+    draw.fontmode = '1'
+    text = shorten(toAscii(text))
+    draw.text(((WIDTH - width(text)) // 2, _top(1)), text, font=FONT, fill=color)
     return img
