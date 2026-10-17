@@ -48,13 +48,6 @@ print("Saved Spotify login to apikeys.json on the Pi.")
 
 
 def main():
-    print('Spotify app settings: https://developer.spotify.com/dashboard')
-    print('The app needs this Redirect URI: ' + REDIRECT_URI + '\n')
-    clientId = input('Client ID: ').strip()
-    clientSecret = getpass.getpass('Client Secret (hidden): ').strip()
-    if not clientId or not clientSecret:
-        sys.exit('Both are required.')
-
     state = secrets.token_urlsafe(16)
     result = {}
 
@@ -80,12 +73,22 @@ def main():
         def log_message(self, *args):
             pass
 
+    # Claim the port before printing any address: VS Code's terminal auto-forwards ports it sees
+    # in output, and would grab this one first.
     try:
         server = http.server.HTTPServer(('127.0.0.1', PORT), Callback)
     except OSError as e:
-        sys.exit('Port %d is in use by another program (%s). Close it, or change PORT in this script '
-                 'and the Redirect URI in your Spotify app to match.' % (PORT, e))
-    url = 'https://accounts.spotify.com/authorize?' + urllib.parse.urlencode({
+        sys.exit('Could not open port %d (%s).\nSomething else holds it - often VS Code port forwarding: '
+                 'stop it in VS Code\'s Ports panel, or run this from a normal PowerShell window.' % (PORT, e))
+
+    print('Spotify app settings: https://developer.spotify.com/dashboard')
+    print('The app needs this Redirect URI: ' + REDIRECT_URI + '\n')
+    clientId = input('Client ID: ').strip()
+    clientSecret = getpass.getpass('Client Secret (hidden): ').strip()
+    if not clientId or not clientSecret:
+        sys.exit('Both are required.')
+
+    url ='https://accounts.spotify.com/authorize?' + urllib.parse.urlencode({
         'client_id': clientId, 'response_type': 'code', 'redirect_uri': REDIRECT_URI,
         'scope': SCOPES, 'state': state})
     print('\nOpening Spotify login in your browser. If it does not open, visit:\n' + url + '\n')
