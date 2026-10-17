@@ -157,13 +157,32 @@ class Frame:
         self.dt = dt              # seconds since the previous frame
 
 
+def weights(text):
+    # Float versions of a Text's mask, shaded mask and outline, cached on the Text: whole-array
+    # arithmetic with these is much faster on the Pi than masked gathers and scatters
+    w = getattr(text, '_weights', None)
+    if w is None:
+        mask = text.mask.astype(np.float32)[:, :, None]
+        ring = text.outline.astype(np.float32)[:, :, None]
+        # 'keep' = how much of the background survives under fully opaque text (with/without outline)
+        w = (mask, (text.mask * text.shade).astype(np.float32)[:, :, None], ring,
+             (1 - mask) * (1 - ring), 1 - mask)
+        text._weights = w
+    return w
+
+
 def paint(out, text, color, alpha=1.0, outline=True):
     # Draws text onto out (float HxWx3) in color ((3,) or HxWx3), with a black outline
+    mask, shaded, ring, keepOutlined, keepPlain = weights(text)
+    if alpha >= 1.0:
+        # The common case: one multiply and one add over the frame
+        out *= keepOutlined if outline else keepPlain
+        out += shaded * np.asarray(color, np.float32)
+        return
     if outline:
-        out[text.outline] *= 1 - alpha
-    m = text.mask
-    c = color[m] if np.ndim(color) == 3 else np.asarray(color, np.float32)
-    out[m] = out[m] * (1 - alpha) + c * text.shade[m][:, None] * alpha
+        out *= 1 - ring * alpha
+    out *= 1 - mask * alpha
+    out += np.asarray(color, np.float32) * (shaded * alpha)
 
 
 class Effect:
@@ -367,4 +386,5 @@ EFFECTS = [Rainbow, Neon, Fire, Karaoke, Plasma, Glitch, Hyperspace, Equalizer]
 
 
 def toBytes(frame):
-    return np.clip(frame, 0, 255).astype(np.uint8)
+    np.clip(frame, 0, 255, out=frame)
+    return frame.astype(np.uint8)

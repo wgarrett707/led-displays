@@ -21,9 +21,17 @@ def bigLetters(text):
 
 
 def additive(out, ys, xs, colors):
-    # Adds colours at pixel coordinates, ignoring ones off the panel
+    # Adds colours at pixel coordinates (overlaps add up), ignoring ones off the panel
     ok = (ys >= 0) & (ys < H) & (xs >= 0) & (xs < W)
-    np.add.at(out, (ys[ok], xs[ok]), colors[ok] if np.ndim(colors) == 2 else colors)
+    colors = colors[ok] if np.ndim(colors) == 2 else np.broadcast_to(np.asarray(colors, np.float32), (int(ok.sum()), 3))
+    if len(colors) < 64:
+        np.add.at(out, (ys[ok], xs[ok]), colors)
+        return
+    # For big batches, one bincount per channel is far faster than ufunc.at
+    index = ys[ok] * W + xs[ok]
+    flat = out.reshape(-1, 3)
+    for c in range(3):
+        flat[:, c] += np.bincount(index, weights=colors[:, c], minlength=H * W).astype(np.float32)
 
 
 def movedLines(text, offsets):
@@ -143,67 +151,174 @@ LAND = {
 }
 
 
-def earthTexture(rows=72, cols=144):
-    # Equirectangular colour map: ocean, green land, tan deserts, white ice
+def smoothNoise(rows, cols, cellsY, cellsX, seed):
+    # Smooth random field (0..1) that wraps around horizontally, made by upscaling a coarse grid
+    from PIL import Image
+    grid = np.random.RandomState(seed).uniform(0, 1, (cellsY, cellsX)).astype(np.float32)
+    tiled = np.hstack([grid, grid, grid])
+    big = Image.fromarray(tiled, 'F').resize((cols * 3, rows), Image.BICUBIC)
+    return np.asarray(big)[:, cols:2 * cols]
+
+
+def fractalNoise(rows, cols, seed, octaves=4):
+    total, weight = np.zeros((rows, cols), np.float32), 0.0
+    for o in range(octaves):
+        cells = 6 * 2 ** o
+        w = 0.5 ** o
+        total += smoothNoise(rows, cols, max(2, cells // 2), cells, seed + o) * w
+        weight += w
+    return total / weight
+
+
+def coarseToFine(coarse, rows, cols):
+    # Smoothly upscales a coarse grid (wrapping around in longitude)
+    from PIL import Image
+    tiled = np.hstack([coarse, coarse, coarse]).astype(np.float32)
+    big = Image.fromarray(tiled, 'F').resize((cols * 3, rows), Image.BICUBIC)
+    return np.asarray(big)[:, cols:2 * cols]
+
+
+def earthTextures(rows=700, cols=1440):
+    # Surface colour and cloud cover at 0.25 degrees, covering latitudes 87.5N to 87.5S.
+    # The coarse LAND table is drawn as a 35x144 grid, scaled up smoothly, then roughened with
+    # fractal noise before cutting into land and sea, which gives natural-looking coastlines.
+    lats = sorted(LAND, reverse=True)
+    coarseLon = -180 + (np.arange(144) + 0.5) * 2.5
+    coarseLand = np.zeros((len(lats), 144), np.float32)
+    coarseDesert = np.zeros((len(lats), 144), np.float32)
+    for r, lat in enumerate(lats):
+        for a, b in LAND[lat]:
+            coarseLand[r] = np.maximum(coarseLand[r], ((coarseLon >= a) & (coarseLon <= b)).astype(np.float32))
+        if 15 <= lat <= 35:
+            coarseDesert[r] = ((coarseLon >= -15) & (coarseLon <= 60)).astype(np.float32)
+        if 25 <= lat <= 40:
+            coarseDesert[r] = np.maximum(coarseDesert[r], ((coarseLon >= -118) & (coarseLon <= -102)).astype(np.float32))
+        if -30 <= lat <= -18:
+            coarseDesert[r] = np.maximum(coarseDesert[r], ((coarseLon >= 118) & (coarseLon <= 145)).astype(np.float32))
+    lat = 87.5 - (np.arange(rows, dtype=np.float32)[:, None] + 0.5) * 175.0 / rows
+    rough = fractalNoise(rows, cols, 11, octaves=5)
+    land = coarseToFine(coarseLand, rows, cols) + (rough - 0.5) * 0.55 > 0.5
+    desert = land & (coarseToFine(coarseDesert, rows, cols) + (fractalNoise(rows, cols, 13, octaves=5) - 0.5) * 1.0 > 0.55)
+    detail = fractalNoise(rows, cols, 37, octaves=5)
     tex = np.zeros((rows, cols, 3), np.float32)
-    rng = np.random.RandomState(7)
-    for r in range(rows):
-        lat = 90 - (r + 0.5) * 180.0 / rows
-        band = int(round(lat / 5.0)) * 5
-        band = max(-85, min(85, band))
-        for c in range(cols):
-            lon = -180 + (c + 0.5) * 360.0 / cols
-            land = any(a <= lon <= b for a, b in LAND[band])
-            if not land:
-                tex[r, c] = (10, 50, 150)
-            elif abs(lat) >= 62:
-                tex[r, c] = (230, 240, 250)
-            elif (15 <= lat <= 35 and -15 <= lon <= 60) or (-30 <= lat <= -18 and 118 <= lon <= 145):
-                tex[r, c] = (200, 160, 90)
-            else:
-                tex[r, c] = (40, 150 + rng.randint(-30, 30), 50)
-    return tex
+    ocean = ~land
+    tex[ocean] = np.array((12, 50, 150)) + (detail[ocean] - 0.5)[:, None] * np.array((10, 30, 60))
+    tex[land] = (np.array((30, 120, 40)) + (detail - 0.5)[:, :, None] * np.array((40, 90, 30)))[land]
+    tex[desert] = np.array((200, 160, 95)) + (detail[desert] - 0.5)[:, None] * 50
+    mountains = land & (detail > 0.74)
+    tex[mountains] = np.array((125, 110, 90)) + (detail[mountains] - 0.74)[:, None] * 300
+    ice = np.broadcast_to(np.abs(lat) >= 66, (rows, cols)) | (np.broadcast_to(np.abs(lat) >= 60, (rows, cols)) & land & (detail > 0.5))
+    tex[ice] = (225, 235, 245)
+    clouds = np.clip((fractalNoise(rows, cols, 51, octaves=5) - 0.6) * 2.8, 0, 0.75)
+    return tex, clouds
+
+
+_earth = {}
+
+
+def earthReady():
+    # The textures take a few seconds to build on the Pi, so that happens in the background the
+    # first time Earth is used; the planet fades in once they're ready
+    if 'thread' not in _earth:
+        import threading
+
+        def build():
+            # Built once (slow on the Pi), then cached on disk as 8-bit data
+            import os
+            path = '/home/pi/led-scripts/lyrics/cache/earth-v1.npz'
+            try:
+                saved = np.load(path)
+                _earth['textures'] = (saved['texture'].astype(np.float32), saved['clouds'].astype(np.float32) / 255)
+                return
+            except (OSError, KeyError, ValueError):
+                pass
+            texture, clouds = earthTextures()
+            _earth['textures'] = (texture, clouds)
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                np.savez(path + '.tmp.npz', texture=np.clip(texture, 0, 255).astype(np.uint8),
+                         clouds=(clouds * 255).astype(np.uint8))
+                os.replace(path + '.tmp.npz', path)
+            except OSError:
+                pass
+        _earth['thread'] = threading.Thread(target=build, daemon=True)
+        _earth['thread'].start()
+    return _earth.get('textures')
 
 
 class Earth(Effect):
-    # A shaded, tilted globe with real continents, spinning behind the text in a starfield
+    # Orbit view: the top of a huge planet curves across the bottom of the panel, spinning, with
+    # drifting clouds, a glowing atmosphere, and stars streaming past above
     name = 'Earth'
-    TEXTURE = earthTexture()
+    RADIUS = 700.0
+    TOP = 19            # planet's highest row (at the centre column)
+    TILT = math.radians(58)
+    SPIN = 3.0          # degrees per second
+    START_LON = -100    # begin over North America
+    ROWS, COLS = 700, 1440   # texture size (0.25 degrees, latitudes 87.5N to 87.5S)
 
     def __init__(self):
-        r, cx, cy = 15.5, 128.0, 15.5
-        nx, ny = (XX + 0.5 - cx) / r, (YY + 0.5 - cy) / r
-        d2 = nx ** 2 + ny ** 2
-        self.disc = d2 < 1
-        nz = np.sqrt(np.clip(1 - d2, 0, 1))
-        tilt = math.radians(23.4)
-        # Tip the globe so the north pole leans toward the viewer
-        y2 = ny * math.cos(tilt) - nz * math.sin(tilt)
-        z2 = ny * math.sin(tilt) + nz * math.cos(tilt)
+        cx, cy = 128.0, self.TOP + self.RADIUS
+        dx, dy = XX + 0.5 - cx, YY + 0.5 - cy
+        dist = np.sqrt(dx ** 2 + dy ** 2)
+        self.planet = dist < self.RADIUS
+        nx, ny = dx / self.RADIUS, dy / self.RADIUS
+        nz = np.sqrt(np.clip(1 - nx ** 2 - ny ** 2, 0, 1))
+        # Lean the planet's axis away from us so the horizon shows mid-latitudes turning past
+        y2 = ny * math.cos(self.TILT) - nz * math.sin(self.TILT)
+        z2 = ny * math.sin(self.TILT) + nz * math.cos(self.TILT)
+        rows, cols = self.ROWS, self.COLS
         lat = np.degrees(np.arcsin(np.clip(-y2, -1, 1)))
         lon = np.degrees(np.arctan2(nx, z2))
-        rows, cols = self.TEXTURE.shape[:2]
-        self.row = np.clip(((90 - lat) / 180.0 * rows).astype(int), 0, rows - 1)
-        self.col = ((lon + 180) / 360.0 * cols).astype(int)
-        # Sunlight from the upper left, plus a little ambient so the night side isn't black
-        light = np.clip(-0.55 * nx - 0.45 * ny + 0.7 * nz, 0, 1)
-        self.light = (0.15 + 0.85 * light)[:, :, None]
-        # Thin blue atmosphere just outside the disc
-        dist = np.sqrt(d2)
-        self.halo = (np.clip(1 - (dist - 1) * 6, 0, 1) * (dist >= 1))[:, :, None] * np.array((40, 90, 255))
-        rng = np.random.RandomState(3)
-        self.stars = (rng.uniform(0, 1, (H, W)) > 0.985) & ~(dist < 1.3)
-        self.twinkle = rng.uniform(0, 6.3, (H, W))
+        self.row = np.clip(((87.5 - lat) / 175.0 * rows).astype(int), 0, rows - 1)[self.planet]
+        # The horizon's centre faces longitude 180 before rotating; shift it to START_LON
+        self.lonCol = ((lon + 180 + (self.START_LON - 180)) % 360 / 360.0 * cols)[self.planet]
+        self.cols = cols
+        self.readyAt = None
+        earthReady()
+        # Darker toward the horizon (limb darkening) and toward the right (away from the sun)
+        limb = np.clip(nz / max(1e-6, float(nz[self.planet].max())), 0, 1)
+        light = (0.45 + 0.55 * np.sqrt(limb)) * (1.0 - 0.35 * (XX / W))
+        self.light = light[self.planet][:, None]
+        # Atmosphere: a bright rim fading out over a few pixels above the surface
+        above = np.clip(dist - self.RADIUS, 0, None)
+        glow = np.where(self.planet, 0, np.clip(1 - above / 5.0, 0, 1) ** 2)
+        self.atmosphere = glow[:, :, None] * np.array((70, 150, 255), np.float32)
+        # Stars stream outward from a point high in the sky, like Hyperspace but gentler
+        self.stars = 160
+        self.sx = np.random.uniform(-1, 1, self.stars)
+        self.sy = np.random.uniform(-1, 1, self.stars)
+        self.sz = np.random.uniform(0.05, 1, self.stars)
 
     def render(self, f):
         out = np.zeros((H, W, 3), np.float32)
-        tw = (0.4 + 0.3 * np.sin(f.t * 3 + self.twinkle)) * self.stars
-        out += tw[:, :, None] * 255
-        out += self.halo * 0.8
-        cols = self.TEXTURE.shape[1]
-        spin = int(f.t * 18) % cols
-        surface = self.TEXTURE[self.row, (self.col + spin) % cols] * self.light
-        out[self.disc] = surface[self.disc] * 0.8
+        speed = 0.3
+        self.sz -= f.dt * speed
+        gone = self.sz <= 0.04
+        n = int(gone.sum())
+        self.sx[gone], self.sy[gone] = np.random.uniform(-1, 1, n), np.random.uniform(-1, 1, n)
+        self.sz[gone] = 1.0
+        for back in (0.0, 0.02, 0.04):
+            z = self.sz + back * speed
+            px = (128 + self.sx / z * 60).astype(int)
+            py = (8 + self.sy / z * 10).astype(int)
+            ok = (px >= 0) & (px < W) & (py >= 0) & (py < H)
+            bright = (np.clip((1.1 - z) * 2.0, 0, 1) * (1 - back * 20))[ok]
+            out[py[ok], px[ok]] = np.maximum(out[py[ok], px[ok]], bright[:, None] * (170, 200, 255))
+        out[self.planet] = 0
+        out += self.atmosphere
+        textures = earthReady()
+        if textures is not None:
+            if self.readyAt is None:
+                self.readyAt = f.t
+            texture, clouds = textures
+            spin = f.t * self.SPIN / 360.0 * self.cols
+            col = (self.lonCol + spin).astype(int) % self.cols
+            cloudCol = (self.lonCol + spin * 1.35).astype(int) % self.cols
+            surface = texture[self.row, col]
+            cloud = clouds[self.row, cloudCol][:, None]
+            surface = surface * (1 - cloud) + 235 * cloud
+            out[self.planet] = surface * self.light * min(1.0, (f.t - self.readyAt) / 1.5)
         paint(out, f.text, (255, 255, 255), alpha=min(1.0, f.age / 0.25))
         return out
 
@@ -452,9 +567,29 @@ class Storm(Effect):
                     branches.append((x, y))
         return np.array(ys), np.clip(np.array(xs), 0, W - 1)
 
+    def scenery(self, out, flash):
+        # Drawn between the sky (and lightning) and the rain; subclasses add things here
+        pass
+
     def render(self, f):
         out = np.zeros((H, W, 3), np.float32)
         out[:] = (6, 8, 18)
+        if f.t >= self.nextStrike:
+            self.strike = (f.t,) + self.bolt()
+            self.nextStrike = f.t + random.uniform(2, 6)
+        textColor, flash = (235, 240, 255), 0.0
+        if self.strike is not None:
+            age = f.t - self.strike[0]
+            flicker = [1, 0.2, 1, 0.6, 0.3]
+            step = int(age / 0.05)
+            if step < len(flicker):
+                flash = flicker[step]
+                out += np.array((70, 70, 110), np.float32) * flash
+                out[self.strike[1], self.strike[2]] = np.array((230, 220, 255)) * flash
+                textColor = (200, 210, 255)
+            else:
+                self.strike = None
+        self.scenery(out, flash)
         d = self.drops
         d[:, 1] += d[:, 2] * f.dt
         d[:, 0] += d[:, 2] * 0.25 * f.dt
@@ -464,21 +599,6 @@ class Storm(Effect):
         for k in range(3):
             additive(out, (d[:, 1] - k).astype(int), (d[:, 0] - k * 0.25).astype(int),
                      np.array((60, 80, 130), np.float32) * (1 - k * 0.3))
-        if f.t >= self.nextStrike:
-            self.strike = (f.t,) + self.bolt()
-            self.nextStrike = f.t + random.uniform(2, 6)
-        textColor = (235, 240, 255)
-        if self.strike is not None:
-            age = f.t - self.strike[0]
-            flicker = [1, 0.2, 1, 0.6, 0.3]
-            step = int(age / 0.05)
-            if step < len(flicker):
-                level = flicker[step]
-                out += np.array((70, 70, 110), np.float32) * level
-                out[self.strike[1], self.strike[2]] = np.array((230, 220, 255)) * level
-                textColor = (200, 210, 255)
-            else:
-                self.strike = None
         paint(out, f.text, textColor, alpha=min(1.0, f.age / 0.2))
         return out
 
