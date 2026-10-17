@@ -1,0 +1,17 @@
+# API keys (see README)
+apikeys.json
+
+# Vendored/build artifacts
+stocks/Python-3.7.3/
+stocks/Python-3.7.3.tar.xz
+rpi-rgb-led-matrix/
+__pycache__/
+*.pyc
+
+# Runtime state written by the hub and programs
+hub/*.txt
+pylog.txt
+stocks/Ready.txt
+stocks/StockNumber.txt
+stocks/displays/
+news/displays/
