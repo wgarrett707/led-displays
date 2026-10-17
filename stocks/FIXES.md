@@ -112,10 +112,21 @@ whatever that buffer held from two swaps earlier: pixels 1-2 px behind the rest 
 **Fix:** new logos are pasted at column 255, so the offset is never positive and every frame covers
 all 256 columns.
 
-If shifted pixels still appear **elsewhere** on the panel, or on the hub menu or other programs, the
-likely cause is the GPIO signal timing instead: `gpio_slowdown` is at its default of 1 (fastest), which
-is marginal on a Pi 3 driving 5 V panels from 3.3 V pins. `options.gpio_slowdown = 2` costs only ~5%
-refresh rate (126 Hz to 120 Hz, measured). Under-voltage makes it worse.
+### Known limitation: "staircase" edges while scrolling (not a bug, left as is)
+While scrolling, vertical edges look staggered by about a pixel every 8 rows. Tests showed every frame
+is correct: a static test pattern is clean at `gpio_slowdown` 1-4, the PNGs are clean, and the effect
+disappears the moment scrolling pauses. The cause is the panels' 1:8 scan: each 8-row band lights its
+rows one after another during a refresh, and when your eyes follow the scroll, later rows look shifted,
+so each band's edge slants and snaps back at the next band. Its size is scroll speed × scan time
+(~63 px/s × 6.9 ms ≈ 0.44 px).
+
+Options tested (2026-10-17):
+- `scan_mode = 1` (interlaced) removes the staircase but makes edges look fuzzy.
+- Faster refresh halves it: `pwm_bits = 11, pwm_lsb_nanoseconds = 200` refreshes at ~224 Hz
+  (needs `brightness` ~50 to match), or 8 bits at 245 Hz but noticeably dimmer.
+- Slower scrolling shrinks it proportionally (`FRAME_TIME`).
+
+Decision: keep the current settings (11 bits, 350 ns, brightness 30).
 
 ## Not changed (recommendations)
 
