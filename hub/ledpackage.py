@@ -6,7 +6,8 @@ numScripts = {'hub' : 1,
               'news' : 1,
               'weather' : 1,
               'discord' : 2,
-              'subs' : 1}
+              'subs' : 1,
+              'lyrics' : 1}
 
 path = '/home/pi/led-scripts/hub/'
 

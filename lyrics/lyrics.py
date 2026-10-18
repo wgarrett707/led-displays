@@ -1,16 +1,18 @@
 #!/usr/bin/env python3.7
 # Shows synced lyrics (from LRCLib) for whatever is playing on Spotify, with animated effects.
+import os
+import ledpackage as lp
+# The hub stops this program (Esc) by the recorded PID, so record it before the slow imports below
+lp.recordPID('lyrics', str(os.getpid()))
 import json
 KEYS = json.load(open('/home/pi/led-scripts/apikeys.json'))
 import bisect
-import os
 import sys
 import threading
 import time
 import traceback
 from PIL import Image
 from rgbmatrix import RGBMatrix, RGBMatrixOptions
-import ledpackage as lp
 import layout
 import lrclib
 import effects
@@ -65,7 +67,6 @@ def log(message):
         pass
 
 
-lp.recordPID('lyrics', str(os.getpid()))
 matrix = RGBMatrix(options=options)
 matrixCanvas = matrix.CreateFrameCanvas()
 # The refresh thread is pinned to CPU 3 at top real-time priority; keep this process (and the
@@ -160,7 +161,8 @@ def pollSpotify(spotify, state):
             log('Spotify request failed: %r' % e)
             with state.lock:
                 state.error = 'Spotify connection problem'
-            delay = min(30, max(delay * 2, POLL_IDLE))
+            # Capped low so lyrics come up soon after the network does when started at boot
+            delay = min(10, max(delay * 2, POLL_IDLE))
         time.sleep(delay)
 
 

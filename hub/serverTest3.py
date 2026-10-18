@@ -14,12 +14,13 @@ K_RIGHT = '\033[C'
 K_ENTER = '\n'
 K_ESC = 27
 
-numScripts = [2, 1, 1, 1, 1]
+numScripts = [2, 1, 1, 1, 1, 1]
 starts = {'stocks' : 'nice -n 10 sudo python3 /home/pi/led-scripts/stocks/FinnhubGeneratorFix2.py & nice -n -20 sudo python3 /home/pi/led-scripts/stocks/logoviewer12.py',
           'news' : 'sudo python3 /home/pi/led-scripts/news/getnews7.py',
           'weather' : 'sudo python3 /home/pi/led-scripts/weather/Generator3.py',
           'discord' : 'nice -n 10 sudo python3 /home/pi/led-scripts/discord/Generator4.py & nice -n -20 sudo python3 /home/pi/led-scripts/discord/logoviewer13.py',
-          'subs' : 'sudo python3 /home/pi/led-scripts/subs/subs2.py'}
+          'subs' : 'sudo python3 /home/pi/led-scripts/subs/subs2.py',
+          'lyrics' : 'sudo python3 /home/pi/led-scripts/lyrics/lyrics.py'}
 
 def sendInput(key):
     f = open('/home/pi/led-scripts/hub/input.txt', 'w')
@@ -112,8 +113,23 @@ def programSelected():
     detectInput(False)
     return
 
+def bootProgram(program):
+    # Starts a program in place of the menu (start3.py does this at boot); Esc then opens the menu
+    f = open('/home/pi/led-scripts/hub/running.txt', 'w')
+    f.write(program)
+    f.close()
+    # The PID files still hold the last session's PIDs until the scripts record new ones
+    for name in ['hub', program]:
+        open('/home/pi/led-scripts/hub/' + name + '.txt', 'w').close()
+    subprocess.Popen(starts[program], shell=True)
+
+booted = len(sys.argv) > 1
+if booted:
+    bootProgram(sys.argv[1])
 time.sleep(2)
 settings = keySettings()
+if booted:
+    detectInput(False)
 while True:
     detectInput(True)
 

@@ -22,12 +22,14 @@ matrix = RGBMatrix(options = options)
 canvas = Image.new('RGB', (256, 32), (0, 0, 0))
 matrixCanvas = matrix.CreateFrameCanvas()
 
-programs = ['stocks', 'news', 'weather', 'discord', 'subs']
+programs = ['stocks', 'news', 'weather', 'discord', 'subs', 'lyrics']
 selection = 1
 img = []
 
 for x in range(0, 6):
     img.append(Image.open('/home/pi/led-scripts/hub/' + str(x + 1) + '.png'))
+# 6.png is the blank screen shown while a program starts, so the lyrics menu screen goes before it
+img.insert(5, Image.open('/home/pi/led-scripts/hub/lyrics.png'))
 
 matrixCanvas.SetImage(canvas, 0)
 matrixCanvas = matrix.SwapOnVSync(matrixCanvas)
@@ -59,10 +61,10 @@ def fetchInput(ts):
 
 def selectNum(change):
     global selection
-    if selection == 5 and change == 1:
+    if selection == len(programs) and change == 1:
         selection = 1
     elif selection == 1 and change == -1:
-        selection = 5
+        selection = len(programs)
     else:
         selection += change
     print(selection)
@@ -90,7 +92,7 @@ while True:
         selectNum(1)
     elif userInput == 'enter':
         logProgram(selection - 1)
-        display(6)
+        display(len(programs) + 1)
     time.sleep(0.1)
 
 print('Finished keyPress script')

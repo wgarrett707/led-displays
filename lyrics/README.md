@@ -18,6 +18,12 @@ Shows synced lyrics for whatever is playing on Spotify, line by line, in time wi
    Client Secret. It opens the Spotify login, then saves `spotify_client_id`,
    `spotify_client_secret` and `spotify_refresh_token` into `apikeys.json` on the Pi.
 
+## In the hub
+
+Lyrics is the 6th item in the hub menu (after Subs), and the hub starts it at boot: 
+in  (set it to  to boot to the menu instead). Esc goes back to the menu, as with
+the other programs.
+
 ## Running it by hand
 
 The matrix can only be driven by one program, so stop the hub first:
