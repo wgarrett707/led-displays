@@ -20,8 +20,8 @@ Shows synced lyrics for whatever is playing on Spotify, line by line, in time wi
 
 ## In the hub
 
-Lyrics is the 6th item in the hub menu (after Subs), and the hub starts it at boot: 
-in  (set it to  to boot to the menu instead). Esc goes back to the menu, as with
+Lyrics is the 6th item in the hub menu (after Subs), and the hub starts it at boot
+(`BOOT_PROGRAM` in `hub/start3.py`; set it to `''` to boot to the menu instead). Esc goes back to the menu, as with
 the other programs.
 
 ## Running it by hand
