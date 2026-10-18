@@ -19,6 +19,7 @@ import effects
 import moreeffects
 import partyeffects
 import clubeffects
+import brat
 from spotify import Spotify, RateLimited
 
 # Lines appear this much before their timestamp; Spotify's reported position trails the audio
@@ -88,9 +89,10 @@ PENDING = 'pending'
 
 
 class Lyrics:
-    def __init__(self, result, error=None):
+    def __init__(self, result, error=None, face=layout.PIXEL):
         # A temporary LRCLib failure counts as an error so the lookup is retried
         self.error = error or (result and result.get('transient'))
+        self.face = face
         self.fetched = time.monotonic()
         self.instrumental = bool(result and result.get('instrumental'))
         synced = result.get('synced') if result else None
@@ -108,15 +110,24 @@ class Lyrics:
             if not layout.toAscii(words):
                 self.texts[index] = None
             else:
-                mask, boxes, wide = layout.lyric(words)
+                mask, boxes, wide = layout.lyric(words, self.face)
                 self.texts[index] = (None, (mask, boxes)) if wide else (effects.Text(mask, boxes), None)
         return self.texts[index]
+
+
+def isBrat(track):
+    # Songs from brat get the album cover's look; LYRICS_EFFECT=brat gives every song that look
+    return (FIXED_EFFECT or '').lower() == 'brat' or brat.matches(track)
+
+
+def faceFor(track):
+    return brat.FACE if isBrat(track) else layout.PIXEL
 
 
 def loadLyrics(state, track):
     try:
         result = lrclib.fetch(track)
-        lyrics = Lyrics(result)
+        lyrics = Lyrics(result, face=faceFor(track))
         off = ' (closest has a %d s different length)' % result['durationOff'] if result.get('durationOff') else ''
         log('Lyrics for %s - %s: %s' % (track.artists[0], track.title,
             '%d lines%s' % (len(lyrics.times), off) if lyrics.times else 'instrumental' if lyrics.instrumental
@@ -193,7 +204,8 @@ def screenFor(state, now):
         note = note or effectName
         artists = ', '.join(playback.artists)
         return Screen(('info', playback.id, note, dim), track=playback.id, paused=paused,
-                      make=lambda: effects.Text(*layout.songInfo(playback.title, artists, note, dim)))
+                      make=lambda: effects.Text(*layout.songInfo(playback.title, artists, note, dim,
+                                                                 faceFor(playback))))
 
     if entry is None or entry == 'loading':
         return info('loading lyrics')
@@ -293,9 +305,14 @@ while True:
         screen = screenFor(state, now)
 
         if screen.track and screen.track != track:
-            # New song: next effect
-            effectCount += 1
-            effect = pickEffect(effectCount)
+            # New song: next effect, unless it has a theme of its own (which doesn't use up a turn)
+            with state.lock:
+                playback = state.playback
+            if playback and playback.id == screen.track and isBrat(playback):
+                effect = brat.Brat()
+            else:
+                effectCount += 1
+                effect = pickEffect(effectCount)
             with state.lock:
                 state.effectName = effect.name
             log('Effect: %s' % effect.name)

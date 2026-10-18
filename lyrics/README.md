@@ -8,6 +8,7 @@ Shows synced lyrics for whatever is playing on Spotify, line by line, in time wi
 - `layout.py` - lays out lines in one font size (6x11 at 16): one line, or two balanced lines;
   the rare line too long for two scrolls sideways. Produces text masks for the effects.
 - `effects.py`, `moreeffects.py`, `partyeffects.py`, `clubeffects.py` - the animated effects
+- `brat.py` - the brat album theme
 - `spotify_auth.py` - one-time Spotify login, run on a PC (not the Pi)
 
 ## Setup
@@ -49,6 +50,12 @@ song info screen). All run at ~43 fps; each frame costs 3-13 ms of CPU on the Pi
 - Earth (orbit view; its 0.25-degree surface is built once and cached in `cache/earth-v1.npz`)
 - Wave, Lasers, Matrix, Fireworks, Synthwave, Disco, Storm, Bounce, Aurora, Pac-Man
 - Rainbow, Neon, Fire, Karaoke, Plasma, Glitch, Hyperspace, Equalizer
+
+**brat theme:** songs from Charli xcx's brat albums (brat, the deluxe, and the remix album) skip the
+cycle and get the cover's look instead: lowercase Arial Narrow, slightly blurred, black on brat
+green (#8ACE00); see `brat.py`. `LYRICS_EFFECT=brat` shows every song that way. Arial Narrow is a
+Microsoft font, so it's kept out of the repo: copy `C:\Windows\Fonts\ARIALN.TTF` to `fonts/` (without
+it the theme falls back to the pixel font).
 
 Beat-synced effects assume 120 BPM (Spotify no longer gives new apps tempo data).
 
