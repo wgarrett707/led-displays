@@ -70,6 +70,8 @@ cached per-line weights, and batch particle drawing (`moreeffects.additive`).
 - Paused: the current line stays up, dimmed. Long instrumental breaks (>12 s between lines) show the
   song info after 8 s.
 - Lookup order: LRCLib `/get-cached` (exact), `/search` matched by track length (+-3 s), then
-  `/get` (which also queries external sources and is often overloaded). Results are cached per
-  Spotify track; "not found" is retried after a day, temporary errors after 10 minutes.
+  `/get` (which also queries external sources and is often overloaded). When search results
+  exist but none is the song's length, the closest length is used (its timing may drift).
+  Results are cached per Spotify track; "not found" and different-length fallbacks are looked
+  up again after a day, temporary errors after 10 minutes.
 - The fonts are ASCII: accents are stripped and characters they can't draw (e.g. CJK) are dropped.

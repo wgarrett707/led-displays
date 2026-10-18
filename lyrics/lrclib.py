@@ -61,14 +61,17 @@ def _isTransient(error):
     return isinstance(error, requests.RequestException)
 
 
-def _pickFromSearch(results, durationS):
-    # Closest-length result that has synced lyrics, within tolerance
+def _pickFromSearch(results, durationS, others):
+    # Closest-length result that has synced lyrics, within tolerance. Synced results of other
+    # lengths go in 'others', the fallback when no source has this length.
     best = None
     for r in results or []:
         if not r.get('syncedLyrics') or r.get('duration') is None:
             continue
         diff = abs(r['duration'] - durationS)
-        if diff <= DURATION_TOLERANCE and (best is None or diff < best[0]):
+        if diff > DURATION_TOLERANCE:
+            others.append((diff, r))
+        elif best is None or diff < best[0]:
             best = (diff, r)
     return best[1] if best else None
 
@@ -79,11 +82,13 @@ def _lookup(track):
     title = cleanTitle(track.title)
     # Cheapest and most exact first. /get (last) also searches external sources, which is
     # slow and often answers 503 "ServerOverloaded".
+    others = []
     attempts = [
         lambda: _get('/get-cached', {'artist_name': artist, 'track_name': track.title,
                                      'album_name': track.album, 'duration': durationS}),
-        lambda: _pickFromSearch(_get('/search', {'artist_name': artist, 'track_name': title}), durationS),
-        lambda: _pickFromSearch(_get('/search', {'q': title + ' ' + artist}), durationS),
+        lambda: _pickFromSearch(_get('/search', {'artist_name': artist, 'track_name': title}),
+                                durationS, others),
+        lambda: _pickFromSearch(_get('/search', {'q': title + ' ' + artist}), durationS, others),
         lambda: _get('/get', {'artist_name': artist, 'track_name': track.title,
                               'album_name': track.album, 'duration': durationS}),
     ]
@@ -101,6 +106,12 @@ def _lookup(track):
         if found and (found.get('syncedLyrics') or found.get('instrumental')):
             break
         found = None
+    if not found and others:
+        # Nothing has this exact length (often a different edit or remaster of the song): the
+        # closest one beats no lyrics, though its timing may drift
+        diff, found = min(others, key=lambda o: o[0])
+        return {'synced': parseLrc(found['syncedLyrics']), 'instrumental': False,
+                'lrclibId': found.get('id'), 'durationOff': diff}
     if not found:
         return {'synced': None, 'instrumental': False, 'transient': repr(transient) if transient else None}
     return {'synced': parseLrc(found['syncedLyrics']) if found.get('syncedLyrics') else None,
@@ -112,15 +123,22 @@ def fetch(track):
     # Returns {'synced': [(ms, words)] or None, 'instrumental': bool}; raises on network errors
     os.makedirs(CACHE_DIR, exist_ok=True)
     path = os.path.join(CACHE_DIR, re.sub(r'[^A-Za-z0-9]', '_', track.id) + '.json')
+    cached = None
     try:
         with open(path) as f:
             cached = json.load(f)
+        # Lyrics of the right length are kept for good; a different-length fallback is looked
+        # up again daily, like a miss, in case lyrics of the right length get added
+        exact = (cached['synced'] or cached['instrumental']) and not cached.get('durationOff')
         retry = TRANSIENT_RETRY if cached.get('transient') else NOT_FOUND_RETRY
-        if cached['synced'] or cached['instrumental'] or time.time() - cached['fetched'] < retry:
+        if exact or time.time() - cached['fetched'] < retry:
             return cached
     except (OSError, ValueError, KeyError):
-        pass
+        cached = None
     result = _lookup(track)
+    if cached and cached.get('synced') and not result['synced'] and not result['instrumental']:
+        # The new lookup failed outright; keep the fallback until the next try
+        result = dict(cached, transient=None)
     result['fetched'] = time.time()
     result['title'] = track.title
     result['artist'] = ', '.join(track.artists)

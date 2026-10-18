@@ -115,9 +115,11 @@ class Lyrics:
 
 def loadLyrics(state, track):
     try:
-        lyrics = Lyrics(lrclib.fetch(track))
+        result = lrclib.fetch(track)
+        lyrics = Lyrics(result)
+        off = ' (closest has a %d s different length)' % result['durationOff'] if result.get('durationOff') else ''
         log('Lyrics for %s - %s: %s' % (track.artists[0], track.title,
-            '%d lines' % len(lyrics.times) if lyrics.times else 'instrumental' if lyrics.instrumental
+            '%d lines%s' % (len(lyrics.times), off) if lyrics.times else 'instrumental' if lyrics.instrumental
             else 'lookup failed, will retry' if lyrics.error else 'none'))
     except Exception as e:
         log('Lyrics lookup failed for %s: %r' % (track.title, e))
