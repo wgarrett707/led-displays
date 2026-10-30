@@ -59,7 +59,8 @@ it the theme falls back to the pixel font).
 
 Beat-synced effects assume 120 BPM (Spotify no longer gives new apps tempo data).
 
-**Flashing:** Strobe, Bass Drop's snare roll and Sirens flash at 4 Hz or more, which can trigger
+**Flashing:** Strobe, Bass Drop, Club Lights and Sirens are left out of the cycle while
+`SKIP_FLASHING` in `lyrics.py` is True. Strobe, Bass Drop's snare roll and Sirens flash at 4 Hz or more, which can trigger
 seizures in people with photosensitive epilepsy. `STROBE_FLASHES_PER_BEAT` in `clubeffects.py` sets
 the strobe rate (2 = 4 flashes a second at 120 BPM).
 

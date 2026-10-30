@@ -50,7 +50,7 @@ options.rows = 32
 options.chain_length = 8
 options.parallel = 1
 options.hardware_mapping = 'regular'
-options.brightness = 30
+options.brightness = 18
 options.multiplexing = 6
 options.led_rgb_sequence = "BGR"
 options.pwm_lsb_nanoseconds = 350
@@ -269,6 +269,12 @@ def show(image):
 # Newest first (club, then party), then the redesigned Earth, then the rest
 ALL_EFFECTS = (clubeffects.EFFECTS + partyeffects.EFFECTS + [moreeffects.Earth]
                + [e for e in moreeffects.EFFECTS if e is not moreeffects.Earth] + effects.EFFECTS)
+# Effects that flash quickly: more than 3 flashes a second over the panel or a quarter of it
+# (Strobe, Bass Drop, Club Lights), or quick red/blue flashes by design (Sirens). Left out of
+# the cycle while SKIP_FLASHING is True; LYRICS_EFFECT=<name> can still pick them.
+SKIP_FLASHING = True
+FLASHING = [clubeffects.Strobe, clubeffects.BassDrop, clubeffects.Sirens, partyeffects.ClubLights]
+CYCLE = [e for e in ALL_EFFECTS if not (SKIP_FLASHING and e in FLASHING)]
 
 
 def pickEffect(count):
@@ -276,7 +282,7 @@ def pickEffect(count):
         for cls in ALL_EFFECTS:
             if cls.name.lower() == FIXED_EFFECT.lower():
                 return cls()
-    return ALL_EFFECTS[count % len(ALL_EFFECTS)]()
+    return CYCLE[count % len(CYCLE)]()
 
 
 state = State()
