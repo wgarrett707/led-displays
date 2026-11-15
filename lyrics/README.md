@@ -113,18 +113,13 @@ The lights follow each song's real beat instead of assuming 120 BPM.
   Pulses leave the matrix on each beat, coloured by the melody note (repeated melodies repeat colours),
   with a palette per section label (the chorus is always pink/orange); build-ups rush in from the
   far ends, faster and whiter. Songs with a chart play its notes instead (pattern `notes`, the default
-  for them): each strip is split into five fret zones in Clone Hero's colours (green nearest the matrix,
-  then red, yellow, blue, orange). A note appears at the outer end of its fret's zone a beat early
-  (`LOOKAHEAD_BEATS`) and slides in to the zone's strike point, landing as it's played: a bright hit and
-  a slowly fading glow over the zone (fast runs blend into a steady glow, no flashing). Held notes trail
-  a tail into the strike point; chords light several zones; open notes light every strike point. The
-  melody is the guitar part, with keys (then bass) filling in where the guitar rests 2 s or more. Drums
-  underneath: kicks swell the strip, snares throw sparkles (each at most ~3 a second,
-  `beatsync.ACCENT_GAP`), hi-hats and cymbals twinkle. Pattern `notepulses` is the earlier version (notes
-  as pulses leaving the matrix). Stretches the chart leaves empty fall back to beat pulses.
-  Everything is drawn over the longer strip's 440 LEDs and fitted to each strip's own length (the 224-LED
-  strip takes the brightest of each pair), since both strips run about the same distance out with
-  different LED spacing; drawn LED for LED, the long side lagged behind the short one. A drop is a white hit then a strobe on the beat for
+  for them): each guitar note (else keys / bass) leaves the matrix as a pulse coloured by its lane, held
+  notes trail a streak while held, kicks swell the strip near the matrix, snares lift the whole strip
+  (each at most ~3 a second, `beatsync.ACCENT_GAP`), hi-hats and cymbals sparkle; stretches the chart
+  leaves empty fall back to beat pulses. Everything is drawn over the longer strip's 440 LEDs and fitted
+  to each strip's own length (the 224-LED strip takes the brightest of each pair), since both strips run
+  about the same distance out with different LED spacing; drawn LED for LED, the long side lagged behind
+  the short one. A drop is a white hit then a strobe on the beat for
   `DROP_STROBE_BARS` bars, never above `MAX_FLASHES` a second. With no analysis, or paused, it stops
   sending and WLED's own audio-reactive playlist (preset 20) takes over again.
 

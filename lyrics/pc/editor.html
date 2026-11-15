@@ -133,13 +133,11 @@ const HOT = [310, 400];
 const COLORS = {'': 'Auto (by label)', '205,265': 'Blue', '165,215': 'Teal', '265,320': 'Violet', '25,50': 'Amber',
   '95,160': 'Green', '330,375': 'Rose', '185,240': 'Sky', '45,110': 'Gold', '310,400': 'Pink / orange',
   '0,40': 'Fire', '180,230': 'Ice', '0,360': 'Rainbow'};
-const PATTERNS = {'': 'Auto (chart notes on frets if the song has a chart, else beat pulses)',
-  notes: 'Chart notes on five frets (Clone Hero colours)', notepulses: 'Chart notes as pulses from the matrix',
+const PATTERNS = {'': 'Auto (chart notes if the song has a chart, else beat pulses)', notes: 'Chart notes (guitar and drums)',
   pulses: 'Beat pulses from the matrix', breathe: 'Whole strip pulses on the beat',
   chase: 'Fast chase on each beat', sparkle: 'Sparkles', rainbow: 'Rainbow wave', solid: 'Solid colour',
   strobe: 'Strobe on the beat', off: 'Off'};
 const LABELS = 'ABCDEFGH'.split('');
-const FRET_HUES = [120, 0, 55, 225, 28];   // green, red, yellow, blue, orange (strips.FRET_HUES)
 
 const $ = id => document.getElementById(id);
 let songs = [], song = null, edit = null, history = [], dirty = false, taps = [];
@@ -457,25 +455,23 @@ function draw() {
   for (const t of taps) if (t > t0 && t < t1) { g.beginPath(); g.moveTo(X(t), h); g.lineTo(X(t) - 5 * r, h - 9 * r); g.lineTo(X(t) + 5 * r, h - 9 * r); g.fill(); }
   g.fillStyle = '#4fa3ff'; g.fillRect(w / 2 - r, 0, 2 * r, h);
 
-  // Rough strip preview: flashes on the beat in the section's colours (on the chart's melody notes when
-  // the song has a chart: in the fret's Clone Hero colour, or the section's colours for note pulses);
-  // white on drops
+  // Rough strip preview: flashes on the beat in the section's colours (on the chart's melody notes,
+  // coloured by lane, when the song has a chart); white on drops
   [g, w, h, r] = sizeCanvas($('preview'));
   const i = Math.max(0, firstAfter(pos) - 1), since = pos - b[i], s = sectionAt(pos), [ha, hb] = hues(s);
   let level = since < 0 ? 0 : Math.exp(-since * 6) * (isBar(i) ? 1 : 0.7);   // nothing before the first beat
-  let hue = ha + (hb - ha) * ((i % 8) / 8), openNote = false;
+  let hue = ha + (hb - ha) * ((i % 8) / 8);
   const notes = song.chart && ['guitar', 'guitarghl', 'keys', 'bass', 'bassghl'].map(k => song.chart[k]).find(n => n && n.length);
-  if (notes && (!s.pattern || s.pattern === 'notes' || s.pattern === 'notepulses')) {
+  if (notes && (!s.pattern || s.pattern === 'notes')) {
     let lo = 0, hi = notes.length;
     while (lo < hi) { const m = (lo + hi) >> 1; if (notes[m][0] <= pos) lo = m + 1; else hi = m; }
     const n = notes[lo - 1];
     if (n && pos - n[0] < 2 * period()) {
       level = pos - n[0] < n[2] ? 0.6 : Math.exp(-(pos - n[0] - n[2]) * 8);
-      hue = s.pattern === 'notepulses' ? (n[1] >= 0 ? ha + (hb - ha) * n[1] / 4 : ha) : n[1] >= 0 ? FRET_HUES[n[1]] : 0;
-      openNote = s.pattern !== 'notepulses' && n[1] < 0;
+      hue = n[1] >= 0 ? ha + (hb - ha) * n[1] / 4 : ha;
     }
   }
-  let light = 10 + 45 * level, sat = openNote ? 0 : 90;
+  let light = 10 + 45 * level, sat = 90;
   const build = edit.drops.find(d => d.buildStart <= pos && pos < d.time);
   if (build) { const p = (pos - build.buildStart) / (build.time - build.buildStart); sat = 90 - 80 * p; light = 15 + 50 * p * level + 10 * p; }
   const drop = edit.drops.find(d => pos >= d.time && pos - d.time < 0.35);
