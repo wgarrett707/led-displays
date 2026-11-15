@@ -15,7 +15,9 @@ DDP_PORT = 4048
 FPS = 42
 # Frames are drawn this far ahead to make up for the network and WLED's own frame
 LEAD = 0.03
-# Both strips are fed from their far ends: (first LED, LED count); the last LED is at the matrix
+# Both strips are fed from their far ends: (first LED, LED count); the last LED is at the matrix.
+# They run about the same distance out from the matrix with different LED spacing, so everything is
+# drawn over LONGEST LEDs and fitted to each strip's own length.
 STRIPS = [(0, 224), (224, 440)]
 LONGEST = max(n for s, n in STRIPS)
 # Pulses cross the longest strip in this many beats
@@ -31,6 +33,10 @@ HOT = (310, 400)
 GAMMA = 2.2
 # Chart notes held longer than this (s) are looked for no further back
 NOTE_HOLD_MAX = 8.0
+# Fret colours (hue degrees) as in Clone Hero: green, red, yellow, blue, orange
+FRET_HUES = (120, 0, 55, 225, 28)
+# A chart note shows up this many beats before it's played (0.4-0.8 s), sliding in to its fret
+LOOKAHEAD_BEATS = 1.0
 
 
 def rgb(hue, sat, val):
@@ -51,6 +57,9 @@ def hsvArray(hue, sat, val):
     return np.stack([r, g, b], 1) + (val - c)[:, None]
 
 
+OPEN_COLOR = rgb(0, 0.0, 0.8)
+
+
 class Strips(threading.Thread):
     def __init__(self, clock):
         threading.Thread.__init__(self, daemon=True)
@@ -60,6 +69,12 @@ class Strips(threading.Thread):
         self.d = np.arange(LONGEST, dtype=np.float32)   # distance from the matrix, in LEDs
         # Where each drum hit's sparkles land (the same LEDs every time the hit plays)
         self.spots = np.random.RandomState(1).randint(0, LONGEST, (4096, 40))
+        self.fretColors = [rgb(h, 1.0, 1.0) for h in FRET_HUES]
+        zone = int(np.ceil(LONGEST / 5.0))
+        self.zoneFade = 0.25 + 0.75 * np.exp(-np.arange(zone, dtype=np.float32) / (zone * 0.35))
+        # Each strip shows the whole picture over its own length, so both sides mirror each other even
+        # though one has more LEDs: a shorter strip takes the brightest of the LEDs it stands for
+        self.pool = {n: np.linspace(0, LONGEST, n + 1).round().astype(int)[:-1] for s, n in STRIPS if n < LONGEST}
         self.raw = np.zeros((sum(n for s, n in STRIPS), 3), np.uint8)
 
     def run(self):
@@ -173,7 +188,64 @@ class Strips(threading.Thread):
                            width=2.5, tail=12)
 
     def draw_notes(self, out, st, hues, level):
-        # The notes from the song's Clone Hero chart. Each melody note (guitar, else keys or bass) leaves
+        # The chart's melody on five frets, like the Clone Hero highway turned on its side. Each strip is
+        # split into five zones, one per fret in Clone Hero's colours: green nearest the matrix, then red,
+        # yellow, blue, orange. A note appears at the outer end of its fret's zone LOOKAHEAD_BEATS early
+        # and slides in to the zone's strike point (its end nearest the matrix), landing as it's played:
+        # a bright hit there, and a glow over the zone that fades slowly, so a fast run on one fret blends
+        # into a steady glow instead of flashing. A held note trails a tail that flows into the strike
+        # point until it's let go. Chords light several zones; open notes light every strike point.
+        # Drums underneath (kicks swell the strip, snares and cymbals sparkle). Where the chart has
+        # nothing for a while, beat pulses instead.
+        a = self.clock.analysis
+        if a is None or not a.hasNotes:
+            return self.draw_pulses(out, st, hues, level)
+        t = st.time
+        look = min(0.8, max(0.4, LOOKAHEAD_BEATS * st.period))
+        lead = a.lead
+        notes = lead[int(np.searchsorted(lead[:, 0], t - NOTE_HOLD_MAX)):int(np.searchsorted(lead[:, 0], t + look, 'right'))]
+        j0 = int(np.searchsorted(a.drumTimes, t - 0.6))
+        j1 = int(np.searchsorted(a.drumTimes, t, 'right'))
+        quiet = 2 * st.period
+        busy = (len(notes) and (np.any(np.abs(notes[:, 0] - t) < quiet) or np.any(notes[:, 0] + notes[:, 2] > t))) or                (j1 > 0 and t - a.drumTimes[j1 - 1] < quiet)
+        if not busy:
+            return self.draw_pulses(out, st, hues, level)
+        out += rgb(hues[0], 0.9, 0.025 + 0.04 * st.energy)
+        zone = LONGEST / 5.0
+        glow = np.zeros(5)
+        for t0, lane, held in notes:
+            due = t0 - t                      # > 0: still on its way
+            for z in (range(5) if lane < 0 else (int(lane),)):
+                inner = z * zone
+                color = (self.fretColors[z] if lane >= 0 else OPEN_COLOR) * level
+                if due > 0:
+                    head = inner + due / look * zone
+                    self.dot(out, head, color * 0.9)
+                    if held > 0:
+                        out[int(head) + 1:int(min(inner + zone, head + held / look * zone))] += color * 0.3
+                    continue
+                age = -due
+                if held > age:
+                    # Being held: what's left of the tail flows into the strike point
+                    out[int(inner):int(min(inner + zone, inner + (held - age) / look * zone))] += color * 0.3
+                glow[z] = max(glow[z], 0.4 * math.exp(-max(0.0, age - held) / 0.35))
+                if age < 0.6:
+                    self.dot(out, inner + 1, color * (1.2 * math.exp(-age / 0.15)), width=2.5)
+        for z in range(5):
+            a0, a1 = int(z * zone), int((z + 1) * zone)
+            # Each strike point stays faintly lit in its colour, so the five frets can be told apart
+            out[a0:a0 + 2] += self.fretColors[z] * 0.07
+            if glow[z] > 0.01:
+                out[a0:a1] += self.zoneFade[:a1 - a0, None] * (self.fretColors[z] * (glow[z] * level))
+        self.drums(out, a, t, j0, j1, hues, level, kick=0.15)
+
+    def dot(self, out, pos, color, width=1.5):
+        lo, hi = max(0, int(pos - 3 * width)), min(LONGEST, int(pos + 3 * width) + 1)
+        if lo < hi:
+            out[lo:hi] += np.exp(-((self.d[lo:hi] - pos) / width) ** 2)[:, None] * color
+
+    def draw_notepulses(self, out, st, hues, level):
+        # The chart's notes as pulses (the first chart pattern; 'notes' is the default). Each melody note (guitar, else keys or bass) leaves
         # the matrix as a pulse coloured by its lane, and a held note leaves a streak behind it for as
         # long as it's held. Kicks swell the whole strip, snares throw pale sparkles everywhere, hi-hats
         # and cymbals sparkle. Where the chart has nothing (an intro, a breakdown), beat pulses instead.
@@ -210,17 +282,23 @@ class Strips(threading.Thread):
             # A held note's streak runs from where it started to where it is now
             shape += 0.4 * ((self.d[None, :] >= tails[:, None]) & (x <= 0) & ((held > 0) & (heads - tails > 1))[:, None])
             out += (shape.T @ colors).astype(np.float32)
+        self.drums(out, a, t, j0, j1, hues, level)
+
+    def drums(self, out, a, t, j0, j1, hues, level, kick=0.3):
+        # The chart's drum hits j0..j1 (the last 0.6 s): kicks swell the whole strip, snares throw pale
+        # sparkles everywhere, hi-hats and cymbals sparkle
         for k in range(j0, j1):
             age = t - a.drumTimes[k]
             lane = a.drumLanes[k]
             if lane == 0:
                 if a.drumAccent[k]:
-                    out += rgb(hues[0], 0.85, 0.3 * level * math.exp(-age / 0.18))
+                    out += rgb(hues[0], 0.85, kick * level * math.exp(-age / 0.18))
                 continue
             if lane == 1 and not a.drumAccent[k]:
                 continue
             count, sat, strength, fade = {1: (40, 0.2, 0.9, 0.12), 2: (6, 0.3, 0.35, 0.12)}.get(lane, (14, 0.3, 0.8, 0.3))
             out[self.spots[k % len(self.spots), :count]] += rgb(hues[1], sat, 1.0) * (level * strength * math.exp(-age / fade))
+
 
     def draw_breathe(self, out, st, hues, level):
         # The whole strip swells on each beat, shading from one colour at the matrix to the other at the ends
@@ -275,7 +353,8 @@ class Strips(threading.Thread):
         # Map distance-from-matrix to each strip's own LED order, gamma-correct, and send over DDP
         values = (np.clip(frame, 0, 1) ** GAMMA * 255).astype(np.uint8)
         for start, n in STRIPS:
-            self.raw[start:start + n] = values[:n][::-1]
+            strip = np.maximum.reduceat(values, self.pool[n], axis=0) if n in self.pool else values
+            self.raw[start:start + n] = strip[::-1]
         data = self.raw.tobytes()
         ip = getattr(self.clock.mic, 'source', None) or WLED_IP
         self.seq = self.seq % 15 + 1

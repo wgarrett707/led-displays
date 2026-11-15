@@ -34,6 +34,8 @@ WINDOW = 20.0
 TRACK_SEARCH = 0.12
 # A seek (or a new play of the song) rather than a timing correction
 SEEK = 1.5
+# Where the chart's guitar rests at least this long (s), its keys (then bass) part fills in
+LEAD_GAP = 2.0
 # Kick and snare accents from a chart: at most one per this many seconds each (about 3 a second)
 ACCENT_GAP = 0.3
 # Spotify positions: each poll's (position - local time); the median of the last ANCHORS is the
@@ -68,8 +70,21 @@ class Analysis:
         # hits as times and lanes (0 kick, 1 snare, 2-4 hi-hat / toms / cymbals)
         chart = data.get('chart') or {}
         self.chartName = '%s (charted by %s)' % (chart.get('name'), chart.get('charter')) if chart else None
-        self.leadPart = next((k for k in ('guitar', 'guitarghl', 'keys', 'bass', 'bassghl') if chart.get(k)), None)
-        self.lead = np.array(chart[self.leadPart], float).reshape(-1, 3) if self.leadPart else np.zeros((0, 3))
+        # The melody is the guitar part; where the guitar rests (2 s or more), keys fill in, then bass
+        parts = [k for k in ('guitar', 'guitarghl', 'keys', 'bass', 'bassghl') if chart.get(k)]
+        self.leadPart = '+'.join(parts) if parts else None
+        lead = np.zeros((0, 3))
+        for k in parts:
+            notes = np.array(chart[k], float).reshape(-1, 3)
+            if len(lead):
+                ends = np.sort(lead[:, 0] + lead[:, 2])
+                starts = np.sort(lead[:, 0])
+                # Kept only away from (and not during) the notes already in
+                near = np.abs(notes[:, 0, None] - starts[None, :]).min(1) < LEAD_GAP
+                during = np.searchsorted(starts, notes[:, 0]) > np.searchsorted(ends, notes[:, 0])
+                notes = notes[~near & ~during]
+            lead = np.concatenate([lead, notes])
+        self.lead = lead[np.argsort(lead[:, 0], kind='stable')]
         drums = np.array(chart.get('drums') or [], float).reshape(-1, 2)
         self.drumTimes, self.drumLanes = drums[:, 0].copy(), drums[:, 1].astype(int)
         self.hasNotes = len(self.lead) > 0 or len(self.drumTimes) > 0
