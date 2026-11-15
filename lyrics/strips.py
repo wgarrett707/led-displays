@@ -35,6 +35,20 @@ def rgb(hue, sat, val):
     return np.array(colorsys.hsv_to_rgb((hue % 360) / 360.0, sat, val), np.float32)
 
 
+def hsvArray(hue, sat, val):
+    # rgb() for an array of hues (degrees)
+    h6 = (np.asarray(hue, np.float32) % 360) / 60.0
+    c = val * sat
+    x = c * (1 - np.abs(h6 % 2 - 1))
+    z = np.zeros_like(h6)
+    c = z + c
+    i = np.floor(h6).astype(int) % 6
+    r = np.choose(i, [c, x, z, z, x, c])
+    g = np.choose(i, [x, c, c, x, z, z])
+    b = np.choose(i, [z, z, x, c, c, x])
+    return np.stack([r, g, b], 1) + (val - c)[:, None]
+
+
 class Strips(threading.Thread):
     def __init__(self, clock):
         threading.Thread.__init__(self, daemon=True)
@@ -69,6 +83,9 @@ class Strips(threading.Thread):
     # ------------------------------------------------------------ drawing (by distance from the matrix)
 
     def palette(self, st):
+        # A section's own colours (set in the editor), else by label; the chorus is always HOT
+        if st.section.get('hues'):
+            return tuple(st.section['hues'])
         if st.section.get('chorus'):
             return HOT
         return PALETTES[(ord(st.section['label']) - 65) % len(PALETTES)]
@@ -80,53 +97,27 @@ class Strips(threading.Thread):
         shape = np.where(x > 0, np.exp(-(x / width) ** 2), np.exp(x / tail))
         out += shape[:, None] * color[None, :]
 
+    def note(self, k):
+        # Melody note (0-11, or -1) on half beat k of the bar-aligned count
+        a = self.clock.analysis
+        if a is None:
+            return -1
+        half = 2 * a.downbeat + k
+        return int(a.notes[half]) if 0 <= half < len(a.notes) else -1
+
     def render(self, st):
         out = np.zeros((LONGEST, 3), np.float32)
-        hueA, hueB = self.palette(st)
-        energy = st.energy
-        level = 0.35 + 0.65 * energy
-        speed = LONGEST / CROSS_BEATS
-        out += rgb(hueA, 0.9, 0.04 + 0.10 * energy)
-
-        def noteHue(note):
-            return hueA + (hueB - hueA) * (note / 11.0) if note >= 0 else hueA
-
-        a = self.clock.analysis
-        notes = a.notes if a is not None else np.array([])
-
-        if st.build is not None:
-            # Build-up: pulses rush in from the far ends, faster and whiter as the drop gets close
-            p = st.build
-            sub = 1 if p < 0.5 else 2 if p < 0.8 else 4
-            count = st.beat * sub
-            for k in range(int(math.floor(count)) - 6 * sub, int(math.floor(count)) + 1):
-                age = (count - k) / sub
-                pos = LONGEST - age * speed * 1.4
-                if pos < -20:
-                    continue
-                color = rgb(hueA + 40 * p, 1.0 - 0.8 * p, 0.4 + 0.6 * p)
-                self.pulse(out, pos, color * level, width=3.0, tail=12.0, inward=True)
-            out += (p ** 2 * 0.3) * (self.d / LONGEST)[:, None] * rgb(0, 0, 1)
+        hues = self.palette(st)
+        level = 0.35 + 0.65 * st.energy
+        pattern = st.section.get('pattern') or 'pulses'
+        if st.build is not None and pattern != 'off':
+            self.buildUp(out, st, hues, level)
         else:
-            # Beats leave the matrix as pulses; each one coloured by the melody note on that beat
-            first = int(math.floor(st.beat))
-            for k in range(first - int(CROSS_BEATS) - 2, first + 1):
-                age = st.beat - k
-                if age < 0:
-                    continue
-                index = k + a.downbeat if a is not None else k
-                half = 2 * index
-                note = int(notes[half]) if 0 <= half < len(notes) else -1
-                strength = (1.0 if k % 4 == 0 else 0.7) * level
-                self.pulse(out, age * speed, rgb(noteHue(note), 0.85, strength), tail=20 + 40 * energy)
-                if energy > 0.65 and age > 0.5:
-                    # Busy parts: a smaller pulse on the off-beat too
-                    note2 = int(notes[half + 1]) if 0 <= half + 1 < len(notes) else note
-                    self.pulse(out, (age - 0.5) * speed, rgb(noteHue(note2), 0.9, 0.45 * strength), width=2.5, tail=12)
+            getattr(self, 'draw_' + pattern, self.draw_pulses)(out, st, hues, level)
 
         if st.sinceLift is not None and st.sinceLift < 0.6:
             # A lift (a big entrance that isn't quite a drop): one wide wave of colour
-            self.pulse(out, st.sinceLift / (st.period * CROSS_BEATS) * LONGEST * 1.2, rgb(hueB, 0.6, 1.0), width=25, tail=60)
+            self.pulse(out, st.sinceLift / (st.period * CROSS_BEATS) * LONGEST * 1.2, rgb(hues[1], 0.6, 1.0), width=25, tail=60)
 
         if st.sinceDrop is not None:
             beatsSince = st.sinceDrop / st.period
@@ -136,6 +127,91 @@ class Strips(threading.Thread):
                 if int(math.floor(beatsSince)) % every == 0 and (beatsSince % 1.0) * st.period < FLASH_ON:
                     out = np.maximum(out, 0.9)
         return out
+
+    def noteHue(self, hues, note):
+        return hues[0] + (hues[1] - hues[0]) * (note / 11.0) if note >= 0 else hues[0]
+
+    # ------------------------------------------------------------ patterns (chosen per section in the editor)
+
+    def buildUp(self, out, st, hues, level):
+        # Pulses rush in from the far ends, faster and whiter as the drop gets close
+        p = st.build
+        speed = LONGEST / CROSS_BEATS
+        out += rgb(hues[0], 0.9, 0.04 + 0.10 * st.energy)
+        sub = 1 if p < 0.5 else 2 if p < 0.8 else 4
+        count = st.beat * sub
+        for k in range(int(math.floor(count)) - 6 * sub, int(math.floor(count)) + 1):
+            age = (count - k) / sub
+            pos = LONGEST - age * speed * 1.4
+            if pos < -20:
+                continue
+            self.pulse(out, pos, rgb(hues[0] + 40 * p, 1.0 - 0.8 * p, 0.4 + 0.6 * p) * level, width=3.0, tail=12.0, inward=True)
+        out += (p ** 2 * 0.3) * (self.d / LONGEST)[:, None] * rgb(0, 0, 1)
+
+    def draw_pulses(self, out, st, hues, level):
+        # Beats leave the matrix as pulses; each coloured by the melody note on that beat
+        speed = LONGEST / CROSS_BEATS
+        out += rgb(hues[0], 0.9, 0.04 + 0.10 * st.energy)
+        first = int(math.floor(st.beat))
+        for k in range(first - int(CROSS_BEATS) - 2, first + 1):
+            age = st.beat - k
+            if age < 0:
+                continue
+            note = self.note(2 * k)
+            strength = (1.0 if k % 4 == 0 else 0.7) * level
+            self.pulse(out, age * speed, rgb(self.noteHue(hues, note), 0.85, strength), tail=20 + 40 * st.energy)
+            if st.energy > 0.65 and age > 0.5:
+                # Busy parts: a smaller pulse on the off-beat too
+                note2 = self.note(2 * k + 1)
+                self.pulse(out, (age - 0.5) * speed, rgb(self.noteHue(hues, note2 if note2 >= 0 else note), 0.9, 0.45 * strength),
+                           width=2.5, tail=12)
+
+    def draw_breathe(self, out, st, hues, level):
+        # The whole strip swells on each beat, shading from one colour at the matrix to the other at the ends
+        phase = st.beat % 1.0
+        bar = 1.0 if int(math.floor(st.beat)) % 4 == 0 else 0.75
+        swell = level * bar * (0.2 + 0.8 * math.exp(-phase * 3.5))
+        mix = (self.d / LONGEST)[:, None]
+        out += ((1 - mix) * rgb(hues[0], 0.85, 1.0) + mix * rgb(hues[1], 0.85, 1.0)) * swell
+
+    def draw_chase(self, out, st, hues, level):
+        # A bright comet runs the full length on every beat
+        k = int(math.floor(st.beat))
+        phase = st.beat - k
+        out += rgb(hues[0], 0.9, 0.05)
+        self.pulse(out, phase * LONGEST * 1.1, rgb(self.noteHue(hues, self.note(2 * k)), 0.8, level), width=6, tail=70)
+
+    def draw_sparkle(self, out, st, hues, level):
+        # Twinkles land on every half beat and fade
+        out += rgb(hues[0], 0.9, 0.03)
+        now = st.beat * 2
+        for k in range(int(math.floor(now)) - 3, int(math.floor(now)) + 1):
+            age = (now - k) / 2 * st.period
+            rng = np.random.RandomState(k & 0x7fffffff)
+            spots = rng.randint(0, LONGEST, 18)
+            colors = np.array([rgb(hues[0] + (hues[1] - hues[0]) * f, 0.6, 1.0) for f in rng.rand(18)], np.float32)
+            out[spots] += colors * (level * math.exp(-age / 0.25))
+
+    def draw_rainbow(self, out, st, hues, level):
+        # A rainbow sliding away from the matrix, a step per beat, brightening on the beat
+        phase = st.beat % 1.0
+        out += hsvArray(self.d * 1.2 - st.beat * 40.0, 1.0, level * (0.35 + 0.65 * math.exp(-phase * 4)))
+
+    def draw_solid(self, out, st, hues, level):
+        # Steady colour with a small lift on each beat
+        phase = st.beat % 1.0
+        out += rgb(hues[0], 0.85, 1.0) * (0.45 * level + 0.2 * math.exp(-phase * 5))
+
+    def draw_strobe(self, out, st, hues, level):
+        # A white flash on the beat (every other beat for fast songs: never over MAX_FLASHES a second)
+        every = 1 if 1.0 / st.period <= MAX_FLASHES else 2
+        k = int(math.floor(st.beat))
+        out += rgb(hues[0], 0.9, 0.03)
+        if k % every == 0 and (st.beat - k) * st.period < FLASH_ON:
+            out[:] = np.maximum(out, 0.9)
+
+    def draw_off(self, out, st, hues, level):
+        pass
 
     # ------------------------------------------------------------ output
 

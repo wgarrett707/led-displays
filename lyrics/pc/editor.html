@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LED Lights Editor</title>
+<style>
+  :root { --bg: #111317; --panel: #1b1e24; --line: #2c313a; --text: #e6e8eb; --dim: #9aa1ab; --accent: #4fa3ff; --red: #ff4d4d; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, sans-serif; }
+  header { display: flex; gap: 10px; align-items: center; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header select { min-width: 280px; }
+  main { padding: 12px 16px; display: grid; gap: 12px; }
+  canvas { width: 100%; display: block; background: #0b0c0f; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .box { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  .box h3 { margin: 0 0 8px; font-size: 13px; color: var(--dim); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 12px; }
+  button, select, input, textarea { background: #262a32; color: var(--text); border: 1px solid #3a404b; border-radius: 6px; padding: 5px 9px; font: inherit; }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); color: #06121f; border-color: var(--accent); font-weight: 600; }
+  kbd { background: #2b3038; border: 1px solid #444b57; border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; font-size: 12px; }
+  .dim { color: var(--dim); }
+  #status { color: var(--dim); }
+  #status.bad { color: var(--red); }
+  #time { font-variant-numeric: tabular-nums; min-width: 120px; }
+  textarea { width: 100%; height: 54px; }
+  #log { font: 12px/1.35 ui-monospace, monospace; color: var(--dim); white-space: pre-wrap; max-height: 120px; overflow: auto; margin-top: 6px; }
+  .help { columns: 2 260px; font-size: 13px; color: var(--dim); }
+  .help div { break-inside: avoid; margin-bottom: 3px; }
+</style>
+</head>
+<body>
+<header>
+  <select id="song" aria-label="Song"></select>
+  <span id="info" class="dim"></span>
+  <span style="flex:1"></span>
+  <span id="status"></span>
+  <button id="save" class="primary" disabled>Save to lights</button>
+</header>
+<main>
+  <canvas id="overview" height="70" aria-label="Whole song"></canvas>
+  <canvas id="detail" height="210" aria-label="Zoomed view around the playhead"></canvas>
+  <canvas id="preview" height="22" aria-label="Rough preview of the strips"></canvas>
+
+  <div class="box row">
+    <button id="play" title="Space">&#9654; Play</button>
+    <span id="time">0:00.0</span>
+    <label class="row"><input type="checkbox" id="click" checked> Click track</label>
+    <input type="range" id="clickVol" min="0" max="1" step="0.05" value="0.6" aria-label="Click volume">
+    <span class="dim">Zoom</span>
+    <button id="zoomIn" title="+">+</button><button id="zoomOut" title="-">&minus;</button>
+    <span style="flex:1"></span>
+    <button id="undo" title="Ctrl+Z" disabled>Undo</button>
+  </div>
+
+  <div class="grid">
+    <div class="box">
+      <h3>Beat grid</h3>
+      <div class="row">
+        <button id="earlier" title="[">&larr; 10 ms earlier</button>
+        <button id="later" title="]">10 ms later &rarr;</button>
+        <span id="shift" class="dim"></span>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button id="double">Tempo &times;2</button>
+        <button id="halve">Tempo &divide;2</button>
+        <button id="bar1" title="B">This beat is bar 1</button>
+        <span id="tempo" class="dim"></span>
+      </div>
+    </div>
+    <div class="box">
+      <h3>Tap along <span class="dim" style="text-transform:none">(press <kbd>T</kbd> on every beat while it plays)</span></h3>
+      <div id="tapInfo" class="dim">No taps yet.</div>
+      <div class="row" style="margin-top:8px">
+        <button id="tapShift" disabled>Move grid onto my taps</button>
+        <button id="tapGrid" disabled>New grid from my tempo</button>
+        <button id="tapClear" disabled>Clear taps</button>
+      </div>
+    </div>
+    <div class="box">
+      <h3>Marks <span class="dim" style="text-transform:none">(snap to the nearest bar line)</span></h3>
+      <div class="row">
+        <button id="markDrop" title="D">Drop here</button>
+        <button id="markBuild" title="U">Build-up starts here</button>
+        <button id="markLift" title="L">Lift here</button>
+        <button id="markSection" title="S">New section here</button>
+        <button id="markDelete" title="X">Delete nearest mark</button>
+      </div>
+    </div>
+    <div class="box">
+      <h3>Section at the playhead</h3>
+      <div class="row">
+        <label>Label <select id="secLabel"></select></label>
+        <label class="row"><input type="checkbox" id="secChorus"> Chorus</label>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label>Strips <select id="secPattern"></select></label>
+        <label>Colours <select id="secColors"></select></label>
+      </div>
+    </div>
+  </div>
+
+  <div class="box">
+    <h3>Analyse songs</h3>
+    <textarea id="links" placeholder="Paste Spotify links: tracks, albums or public playlists (one or more)"></textarea>
+    <div class="row" style="margin-top:6px"><button id="analyse">Analyse</button><span class="dim">New songs appear in the list when they're done (about a minute each).</span></div>
+    <div id="log"></div>
+  </div>
+
+  <div class="box help">
+    <div><kbd>Space</kbd> play / pause</div>
+    <div><kbd>&larr;</kbd> <kbd>&rarr;</kbd> back / forward 2 s (<kbd>Shift</kbd>: 10 s)</div>
+    <div><kbd>T</kbd> tap on the beat</div>
+    <div><kbd>[</kbd> <kbd>]</kbd> grid 10 ms earlier / later (<kbd>Shift</kbd>: 1 ms)</div>
+    <div><kbd>B</kbd> the nearest beat is bar 1</div>
+    <div><kbd>D</kbd> drop, <kbd>U</kbd> build-up start, <kbd>L</kbd> lift, <kbd>S</kbd> new section</div>
+    <div><kbd>X</kbd> delete the nearest mark</div>
+    <div><kbd>Ctrl</kbd>+<kbd>Z</kbd> undo &middot; click the waveform to jump</div>
+    <div>Drops: a white hit, then a short strobe on the beat. Lifts: one big wave of colour.</div>
+    <div>Click track: high click on bar 1, low clicks on the other beats.</div>
+  </div>
+</main>
+
+<script>
+// Palettes and patterns, matching strips.py
+const PALETTES = [[205, 265], [165, 215], [265, 320], [25, 50], [95, 160], [330, 375], [185, 240], [45, 110]];
+const HOT = [310, 400];
+const COLORS = {'': 'Auto (by label)', '205,265': 'Blue', '165,215': 'Teal', '265,320': 'Violet', '25,50': 'Amber',
+  '95,160': 'Green', '330,375': 'Rose', '185,240': 'Sky', '45,110': 'Gold', '310,400': 'Pink / orange',
+  '0,40': 'Fire', '180,230': 'Ice', '0,360': 'Rainbow'};
+const PATTERNS = {'': 'Auto (beat pulses)', pulses: 'Beat pulses from the matrix', breathe: 'Whole strip pulses on the beat',
+  chase: 'Fast chase on each beat', sparkle: 'Sparkles', rainbow: 'Rainbow wave', solid: 'Solid colour',
+  strobe: 'Strobe on the beat', off: 'Off'};
+const LABELS = 'ABCDEFGH'.split('');
+
+const $ = id => document.getElementById(id);
+let songs = [], song = null, edit = null, history = [], dirty = false, taps = [];
+let zoom = 8;                     // seconds across the detail view
+const ctx = new AudioContext();
+const songGain = ctx.createGain(); songGain.connect(ctx.destination);
+const clickGain = ctx.createGain(); clickGain.gain.value = 0.6; clickGain.connect(ctx.destination);
+let buffer = null, source = null, playing = false, startedCtx = 0, startedPos = 0, pausedPos = 0, scheduledTo = 0;
+
+// ---------------------------------------------------------------- playback
+function duration() { return buffer ? buffer.duration : (song ? song.durationMs / 1000 : 0); }
+function position() { return playing ? Math.min(duration(), startedPos + (ctx.currentTime - startedCtx)) : pausedPos; }
+function stopSource() { if (source) { source.onended = null; try { source.stop(); } catch (e) {} source = null; } }
+function play(from) {
+  if (!buffer) return;
+  ctx.resume();
+  stopSource();
+  source = ctx.createBufferSource();
+  source.buffer = buffer;
+  source.connect(songGain);
+  startedCtx = ctx.currentTime + 0.05;
+  startedPos = Math.max(0, Math.min(from, duration() - 0.05));
+  source.start(startedCtx, startedPos);
+  source.onended = () => { if (playing) { pausedPos = duration(); playing = false; updateButtons(); } };
+  playing = true; scheduledTo = startedPos;
+  updateButtons();
+}
+function pause() { pausedPos = position(); stopSource(); playing = false; updateButtons(); }
+function seek(t) { t = Math.max(0, Math.min(duration(), t)); if (playing) play(t); else pausedPos = t; }
+// The song position being heard when a key was pressed (output delay included)
+function heardAt(eventStamp) {
+  if (!playing) return pausedPos;
+  let t = ctx.currentTime - (ctx.outputLatency || 0) - (ctx.baseLatency || 0);
+  if (ctx.getOutputTimestamp) {
+    const ts = ctx.getOutputTimestamp();
+    if (ts.performanceTime) t = ts.contextTime + (eventStamp - ts.performanceTime) / 1000;
+  }
+  return startedPos + (t - startedCtx);
+}
+
+// Click track: scheduled slightly ahead on the audio clock, so it's exactly on the grid
+setInterval(() => {
+  if (!playing || !edit || !$('click').checked) { scheduledTo = position(); return; }
+  const horizon = position() + 0.25;
+  const beats = edit.beats;
+  for (let i = firstAfter(scheduledTo); i < beats.length && beats[i] <= horizon; i++) {
+    const when = startedCtx + (beats[i] - startedPos);
+    if (when < ctx.currentTime) continue;
+    const one = isBar(i);
+    const osc = ctx.createOscillator(), g = ctx.createGain();
+    osc.frequency.value = one ? 2000 : 1100;
+    g.gain.setValueAtTime(one ? 1 : 0.6, when);
+    g.gain.exponentialRampToValueAtTime(0.001, when + 0.04);
+    osc.connect(g); g.connect(clickGain);
+    osc.start(when); osc.stop(when + 0.05);
+  }
+  scheduledTo = horizon;
+}, 25);
+
+// ---------------------------------------------------------------- grid helpers
+function firstAfter(t) { let lo = 0, hi = edit.beats.length; while (lo < hi) { const m = (lo + hi) >> 1; if (edit.beats[m] <= t) lo = m + 1; else hi = m; } return lo; }
+function nearestBeat(t) { const i = firstAfter(t); if (i <= 0) return 0; if (i >= edit.beats.length) return edit.beats.length - 1; return (t - edit.beats[i - 1] < edit.beats[i] - t) ? i - 1 : i; }
+function isBar(i) { return (((i - edit.downbeat) % 4) + 4) % 4 === 0; }
+function nearestBar(t) {
+  const i = nearestBeat(t); let best = null;
+  for (let j = i - 3; j <= i + 3; j++) if (j >= 0 && j < edit.beats.length && isBar(j) && (best === null || Math.abs(edit.beats[j] - t) < Math.abs(edit.beats[best] - t))) best = j;
+  return best === null ? i : best;
+}
+function period() { const b = edit.beats; const d = []; for (let i = 1; i < b.length; i++) d.push(b[i] - b[i - 1]); d.sort((x, y) => x - y); return d[d.length >> 1]; }
+function sectionAt(t) { let s = edit.sections[0]; for (const x of edit.sections) if (x.start <= t + 1e-6) s = x; return s; }
+function hues(s) { if (s.hues) return s.hues; if (s.chorus) return HOT; return PALETTES[(s.label.charCodeAt(0) - 65) % PALETTES.length]; }
+function hsl(h, s, l) { return `hsl(${((h % 360) + 360) % 360},${s}%,${l}%)`; }
+function fmt(t) { const m = Math.floor(t / 60); return m + ':' + (t - m * 60).toFixed(1).padStart(4, '0'); }
+
+// ---------------------------------------------------------------- editing
+function snapshot() { history.push(JSON.stringify(edit)); if (history.length > 100) history.shift(); }
+function changed(message) { dirty = true; updateButtons(); if (message) status(message); }
+function act(message, fn) { snapshot(); fn(); changed(message); }
+function status(text, bad) { $('status').textContent = text || ''; $('status').className = bad ? 'bad' : ''; }
+
+function shiftGrid(s) { act(null, () => { edit.beats = edit.beats.map(b => b + s); edit.shift += s; }); }
+function setBar1() { const i = nearestBeat(position()); act('Bar 1 set at ' + fmt(edit.beats[i]), () => { edit.downbeat = ((i % 4) + 4) % 4; }); }
+function addDrop() {
+  const i = nearestBar(position()), t = edit.beats[i];
+  if (edit.drops.some(d => Math.abs(d.time - t) < 0.1)) return status('There is already a drop there');
+  act('Drop at ' + fmt(t), () => { edit.drops.push({time: t, strength: 10, buildStart: edit.beats[Math.max(0, i - 32)]}); edit.drops.sort((a, b) => a.time - b.time); });
+}
+function setBuild() {
+  const t = edit.beats[nearestBar(position())];
+  const d = edit.drops.find(d => d.time > t + 0.05);
+  if (!d) return status('Mark the drop first, then where its build-up starts', true);
+  act('Build-up into the ' + fmt(d.time) + ' drop starts at ' + fmt(t), () => { d.buildStart = t; });
+}
+function addLift() {
+  const t = edit.beats[nearestBar(position())];
+  act('Lift at ' + fmt(t), () => { edit.lifts.push({time: t, strength: 5, buildStart: t}); edit.lifts.sort((a, b) => a.time - b.time); });
+}
+function addSection() {
+  const t = edit.beats[nearestBar(position())];
+  if (edit.sections.some(s => Math.abs(s.start - t) < 0.1)) return status('A section already starts there');
+  const used = new Set(edit.sections.map(s => s.label));
+  const label = LABELS.find(l => !used.has(l)) || 'H';
+  act('New section ' + label + ' at ' + fmt(t), () => { edit.sections.push({start: t, label, chorus: false}); edit.sections.sort((a, b) => a.start - b.start); });
+}
+function deleteMark() {
+  const t = position(), marks = [];
+  edit.drops.forEach(d => { marks.push({t: d.time, kind: 'drop', ref: d}); marks.push({t: d.buildStart, kind: 'build', ref: d}); });
+  edit.lifts.forEach(d => marks.push({t: d.time, kind: 'lift', ref: d}));
+  edit.sections.forEach((s, i) => { if (i > 0) marks.push({t: s.start, kind: 'section', ref: s}); });
+  marks.sort((a, b) => Math.abs(a.t - t) - Math.abs(b.t - t));
+  const m = marks[0];
+  if (!m || Math.abs(m.t - t) > 3) return status('No mark within 3 s of the playhead');
+  act('Deleted the ' + m.kind + ' at ' + fmt(m.t), () => {
+    if (m.kind === 'drop') edit.drops = edit.drops.filter(d => d !== m.ref);
+    else if (m.kind === 'lift') edit.lifts = edit.lifts.filter(d => d !== m.ref);
+    else if (m.kind === 'section') edit.sections = edit.sections.filter(s => s !== m.ref);
+    else m.ref.buildStart = m.ref.time;    // no build-up
+  });
+}
+function doubleTempo() {
+  act('Tempo doubled', () => {
+    const b = edit.beats, out = [];
+    for (let i = 0; i < b.length; i++) { out.push(b[i]); if (i + 1 < b.length) out.push((b[i] + b[i + 1]) / 2); }
+    edit.beats = out; edit.downbeat = (edit.downbeat * 2) % 4;
+  });
+}
+function halveTempo() {
+  act('Tempo halved', () => {
+    const keep = edit.beats.filter((b, i) => (((i - edit.downbeat) % 2) + 2) % 2 === 0);
+    const firstBar = edit.beats.find((b, i) => isBar(i));
+    edit.beats = keep;
+    edit.downbeat = ((keep.findIndex(b => b === firstBar) % 4) + 4) % 4;
+  });
+}
+
+// Taps: tempo and timing against the grid
+function tapStats() {
+  if (taps.length < 4) return null;
+  const t = taps.slice().sort((a, b) => a - b);
+  const d = []; for (let i = 1; i < t.length; i++) if (t[i] - t[i - 1] > 0.2 && t[i] - t[i - 1] < 2) d.push(t[i] - t[i - 1]);
+  if (d.length < 3) return null;
+  d.sort((a, b) => a - b);
+  const p0 = d[d.length >> 1];
+  const k = t.map(x => Math.round((x - t[0]) / p0));
+  const n = t.length, mk = k.reduce((a, b) => a + b) / n, mt = t.reduce((a, b) => a + b) / n;
+  let sxy = 0, sxx = 0; for (let i = 0; i < n; i++) { sxy += (k[i] - mk) * (t[i] - mt); sxx += (k[i] - mk) ** 2; }
+  const p = sxx ? sxy / sxx : p0, a = mt - p * mk;
+  const off = taps.map(x => x - edit.beats[nearestBeat(x)]);
+  const mean = off.reduce((a, b) => a + b) / off.length;
+  const sd = Math.sqrt(off.reduce((s, x) => s + (x - mean) ** 2, 0) / off.length);
+  return {bpm: 60 / p, period: p, a, mean, sd, n};
+}
+function showTaps() {
+  const s = tapStats();
+  $('tapShift').disabled = $('tapGrid').disabled = !s;
+  $('tapClear').disabled = !taps.length;
+  if (!s) { $('tapInfo').textContent = taps.length ? taps.length + ' taps (keep going...)' : 'No taps yet.'; return; }
+  const gridBpm = 60 / period();
+  const when = Math.abs(s.mean) < 0.012 ? 'right on the grid' : Math.abs(s.mean * 1000).toFixed(0) + ' ms ' + (s.mean > 0 ? 'after' : 'before') + ' the grid';
+  $('tapInfo').innerHTML = `${s.n} taps: <b>${s.bpm.toFixed(1)} BPM</b> (grid ${gridBpm.toFixed(1)}). On average ${when}, give or take ${(s.sd * 1000).toFixed(0)} ms.` +
+    (Math.abs(s.bpm / gridBpm - 2) < 0.15 ? ' You are tapping twice as fast as the grid: try Tempo &times;2.' : '') +
+    (Math.abs(s.bpm / gridBpm - 0.5) < 0.08 ? ' You are tapping half as fast as the grid: try Tempo &divide;2.' : '');
+}
+function tapShift() { const s = tapStats(); shiftGrid(s.mean); status('Grid moved ' + (s.mean * 1000).toFixed(0) + ' ms onto your taps'); taps = []; showTaps(); }
+function tapGrid() {
+  const s = tapStats();
+  act('New grid at ' + s.bpm.toFixed(1) + ' BPM from your taps', () => {
+    const barTime = edit.beats[nearestBar(taps[0])];
+    const out = []; for (let k = Math.ceil(-s.a / s.period); s.a + k * s.period <= duration(); k++) out.push(s.a + k * s.period);
+    edit.beats = out;
+    let i = 0; for (let j = 0; j < out.length; j++) if (Math.abs(out[j] - barTime) < Math.abs(out[i] - barTime)) i = j;
+    edit.downbeat = i % 4;
+  });
+  taps = []; showTaps();
+}
+
+// ---------------------------------------------------------------- section panel
+function fillSelect(el, options) { el.innerHTML = ''; for (const [v, text] of Object.entries(options)) { const o = document.createElement('option'); o.value = v; o.textContent = text; el.appendChild(o); } }
+fillSelect($('secPattern'), PATTERNS);
+fillSelect($('secColors'), COLORS);
+fillSelect($('secLabel'), Object.fromEntries(LABELS.map(l => [l, l])));
+let shownSection = null;
+function showSection() {
+  if (!edit) return;
+  const s = sectionAt(position());
+  if (s === shownSection) return;
+  shownSection = s;
+  $('secLabel').value = s.label; $('secChorus').checked = !!s.chorus;
+  $('secPattern').value = s.pattern || ''; $('secColors').value = s.hues ? s.hues.join(',') : '';
+}
+$('secLabel').onchange = () => { const s = sectionAt(position()); act('Section is now ' + $('secLabel').value, () => { s.label = $('secLabel').value; }); };
+$('secChorus').onchange = () => { const s = sectionAt(position()); act(null, () => { s.chorus = $('secChorus').checked; }); };
+$('secPattern').onchange = () => { const s = sectionAt(position()); act(null, () => { s.pattern = $('secPattern').value || undefined; }); };
+$('secColors').onchange = () => { const s = sectionAt(position()); act(null, () => { const v = $('secColors').value; s.hues = v ? v.split(',').map(Number) : undefined; }); };
+
+// ---------------------------------------------------------------- drawing
+function sizeCanvas(c) { const r = devicePixelRatio || 1, w = c.clientWidth * r, h = c.getAttribute('height') * r; if (c.width !== w || c.height !== h) { c.width = w; c.height = h; c.style.height = c.getAttribute('height') + 'px'; } return [c.getContext('2d'), w, h, r]; }
+
+function drawWave(g, x0, x1, t0, t1, top, h, color) {
+  const pk = song.peaks, rate = song.peaksRate, w = x1 - x0;
+  g.fillStyle = color;
+  for (let x = 0; x < w; x++) {
+    const a = Math.floor((t0 + (t1 - t0) * x / w) * rate), b = Math.max(a + 1, Math.floor((t0 + (t1 - t0) * (x + 1) / w) * rate));
+    let v = 0; for (let i = Math.max(0, a); i < Math.min(pk.length, b); i++) v = Math.max(v, pk[i]);
+    const hh = v * h / 2; g.fillRect(x0 + x, top + h / 2 - hh, 1, Math.max(1, hh * 2));
+  }
+}
+function drawMarks(g, X, t0, t1, top, h, r, labels) {
+  // Sections
+  edit.sections.forEach((s, i) => {
+    const end = i + 1 < edit.sections.length ? edit.sections[i + 1].start : duration();
+    if (end < t0 || s.start > t1) return;
+    const [a] = hues(s);
+    g.fillStyle = hsl(a, 70, 30); g.fillRect(X(s.start), top, X(end) - X(s.start), 12 * r);
+    g.fillStyle = hsl(a, 80, 55); g.fillRect(X(s.start), top, 2 * r, h);
+    if (labels) { g.fillStyle = '#fff'; g.font = `${11 * r}px system-ui`; g.fillText(s.label + (s.chorus ? ' chorus' : '') + (s.pattern ? ' / ' + s.pattern : ''), X(s.start) + 4 * r, top + 10 * r); }
+  });
+  // Build-ups, drops, lifts
+  for (const d of edit.drops) {
+    if (d.buildStart < d.time) { const grad = g.createLinearGradient(X(d.buildStart), 0, X(d.time), 0); grad.addColorStop(0, 'rgba(255,255,255,0)'); grad.addColorStop(1, 'rgba(255,255,255,0.22)'); g.fillStyle = grad; g.fillRect(X(d.buildStart), top + 12 * r, X(d.time) - X(d.buildStart), h - 12 * r); }
+    g.fillStyle = '#ff3b3b'; g.fillRect(X(d.time) - r, top, 3 * r, h);
+    if (labels) { g.font = `bold ${11 * r}px system-ui`; g.fillText('DROP', X(d.time) + 4 * r, top + h - 6 * r); }
+  }
+  for (const d of edit.lifts) { g.fillStyle = '#ffa53b'; g.fillRect(X(d.time) - r, top, 2 * r, h); if (labels) { g.font = `${11 * r}px system-ui`; g.fillText('lift', X(d.time) + 4 * r, top + h - 6 * r); } }
+}
+
+function draw() {
+  requestAnimationFrame(draw);
+  if (!song || !edit) return;
+  const pos = position(), dur = duration();
+  $('time').textContent = fmt(pos) + ' / ' + fmt(dur);
+  showSection();
+
+  // Whole song
+  let [g, w, h, r] = sizeCanvas($('overview'));
+  g.clearRect(0, 0, w, h);
+  const XO = t => t / dur * w;
+  drawWave(g, 0, w, 0, dur, 14 * r, h - 14 * r, '#3d4656');
+  drawMarks(g, XO, 0, dur, 0, h, r, false);
+  g.fillStyle = 'rgba(79,163,255,.18)'; g.fillRect(XO(pos - zoom / 2), 0, XO(zoom) , h);
+  g.fillStyle = '#fff'; g.fillRect(XO(pos), 0, r, h);
+
+  // Around the playhead
+  [g, w, h, r] = sizeCanvas($('detail'));
+  g.clearRect(0, 0, w, h);
+  const t0 = pos - zoom / 2, t1 = pos + zoom / 2, X = t => (t - t0) / zoom * w;
+  drawWave(g, 0, w, t0, t1, 14 * r, h - 14 * r, '#465166');
+  drawMarks(g, X, t0, t1, 0, h, r, true);
+  const b = edit.beats;
+  for (let i = Math.max(0, firstAfter(t0) - 1); i < b.length && b[i] <= t1; i++) {
+    const one = isBar(i);
+    g.fillStyle = one ? 'rgba(255,255,255,.9)' : 'rgba(255,255,255,.28)';
+    g.fillRect(X(b[i]) - (one ? r : 0), 14 * r, one ? 2 * r : r, h - 14 * r);
+    if (one) { g.font = `${10 * r}px system-ui`; g.fillText(String(Math.floor((i - edit.downbeat) / 4) + 1), X(b[i]) + 3 * r, 26 * r); }
+  }
+  g.fillStyle = '#ffd34d';
+  for (const t of taps) if (t > t0 && t < t1) { g.beginPath(); g.moveTo(X(t), h); g.lineTo(X(t) - 5 * r, h - 9 * r); g.lineTo(X(t) + 5 * r, h - 9 * r); g.fill(); }
+  g.fillStyle = '#4fa3ff'; g.fillRect(w / 2 - r, 0, 2 * r, h);
+
+  // Rough strip preview: flashes on the beat in the section's colours; white on drops
+  [g, w, h, r] = sizeCanvas($('preview'));
+  const i = Math.max(0, firstAfter(pos) - 1), since = pos - b[i], s = sectionAt(pos), [ha, hb] = hues(s);
+  let level = Math.exp(-since * 6) * (isBar(i) ? 1 : 0.7);
+  let light = 10 + 45 * level, sat = 90;
+  const build = edit.drops.find(d => d.buildStart <= pos && pos < d.time);
+  if (build) { const p = (pos - build.buildStart) / (build.time - build.buildStart); sat = 90 - 80 * p; light = 15 + 50 * p * level + 10 * p; }
+  const drop = edit.drops.find(d => pos >= d.time && pos - d.time < 0.35);
+  if (s.pattern === 'off') light = 3;
+  g.fillStyle = drop ? '#fff' : hsl(ha + (hb - ha) * ((i % 8) / 8), sat, light);
+  g.fillRect(0, 0, w, h);
+}
+requestAnimationFrame(draw);
+
+// ---------------------------------------------------------------- loading and saving
+function updateButtons() {
+  $('play').innerHTML = playing ? '&#10074;&#10074; Pause' : '&#9654; Play';
+  $('save').disabled = !dirty;
+  $('undo').disabled = !history.length;
+  if (edit) {
+    $('shift').textContent = edit.shift ? 'Moved ' + (edit.shift > 0 ? '+' : '') + (edit.shift * 1000).toFixed(0) + ' ms' : '';
+    $('tempo').textContent = (60 / period()).toFixed(1) + ' BPM';
+  }
+}
+async function loadSongs(keep) {
+  songs = await (await fetch('/api/songs')).json();
+  const sel = $('song'), current = keep || sel.value;
+  sel.innerHTML = '';
+  for (const s of songs) {
+    const o = document.createElement('option'); o.value = s.id;
+    o.textContent = `${s.artist} - ${s.title}` + (s.error ? '  (no audio found)' : `  (${Math.round(s.tempo)} BPM${s.drops ? ', ' + s.drops + ' drop' + (s.drops > 1 ? 's' : '') : ''})`) + (s.edited ? '  ✓' : '');
+    o.disabled = !!s.error; sel.appendChild(o);
+  }
+  if (current && songs.some(s => s.id === current)) sel.value = current;
+}
+async function openSong(id) {
+  if (dirty && !confirm('Discard unsaved changes to this song?')) { $('song').value = song.id; return; }
+  pause(); buffer = null; song = null; edit = null; taps = []; history = []; dirty = false; shownSection = null;
+  status('Loading...');
+  const r = await fetch('/api/song?id=' + id); song = await r.json();
+  if (song.error && !song.beats) { status(song.error, true); return; }
+  edit = {beats: song.beats.slice(), downbeat: song.downbeat, sections: JSON.parse(JSON.stringify(song.sections)),
+          drops: JSON.parse(JSON.stringify(song.drops)), lifts: JSON.parse(JSON.stringify(song.lifts)), shift: 0};
+  $('info').textContent = `${song.artist} – ${song.title}` + (song.edited ? ` (edited ${song.editedAt})` : ' (automatic)');
+  pausedPos = 0; updateButtons(); showTaps();
+  status('Loading audio...');
+  buffer = await ctx.decodeAudioData(await (await fetch('/audio?id=' + id)).arrayBuffer());
+  status('Ready');
+}
+async function save() {
+  status('Saving...');
+  $('save').disabled = true;
+  const r = await fetch('/api/save?id=' + song.id, {method: 'POST', body: JSON.stringify(edit)});
+  const out = await r.json();
+  if (out.error) { status(out.error, true); $('save').disabled = false; return; }
+  const keepPos = position(), wasPlaying = playing;
+  Object.assign(song, out.song);
+  edit.shift = 0; dirty = false; history = []; updateButtons();
+  status(out.sent ? 'Saved and sent to the lights' : 'Saved (the Pi could not be reached; it will get it next time)', !out.sent);
+  if (wasPlaying) play(keepPos);
+  loadSongs(song.id);
+}
+async function pollLog() {
+  try { const lines = await (await fetch('/api/log')).json(); const el = $('log'); const text = lines.join('\n'); if (el.textContent !== text) { el.textContent = text; el.scrollTop = 1e9; if (/Done\.|: \d+\.\d BPM/.test(text)) loadSongs(); } } catch (e) {}
+  setTimeout(pollLog, 2000);
+}
+
+// ---------------------------------------------------------------- wiring
+$('song').onchange = () => openSong($('song').value);
+$('play').onclick = () => playing ? pause() : play(position());
+$('save').onclick = save;
+$('undo').onclick = () => { if (history.length) { edit = JSON.parse(history.pop()); shownSection = null; dirty = true; updateButtons(); status('Undone'); } };
+$('clickVol').oninput = () => { clickGain.gain.value = +$('clickVol').value; };
+$('zoomIn').onclick = () => { zoom = Math.max(2, zoom / 1.5); };
+$('zoomOut').onclick = () => { zoom = Math.min(60, zoom * 1.5); };
+$('earlier').onclick = () => shiftGrid(-0.01);
+$('later').onclick = () => shiftGrid(0.01);
+$('double').onclick = doubleTempo; $('halve').onclick = halveTempo; $('bar1').onclick = setBar1;
+$('tapShift').onclick = tapShift; $('tapGrid').onclick = tapGrid; $('tapClear').onclick = () => { taps = []; showTaps(); };
+$('markDrop').onclick = addDrop; $('markBuild').onclick = setBuild; $('markLift').onclick = addLift;
+$('markSection').onclick = addSection; $('markDelete').onclick = deleteMark;
+$('analyse').onclick = async () => { await fetch('/api/analyze', {method: 'POST', body: JSON.stringify({links: $('links').value})}); $('links').value = ''; };
+$('overview').onclick = e => { const rc = e.target.getBoundingClientRect(); seek((e.clientX - rc.left) / rc.width * duration()); };
+$('detail').onclick = e => { const rc = e.target.getBoundingClientRect(); seek(position() - zoom / 2 + (e.clientX - rc.left) / rc.width * zoom); };
+$('detail').onwheel = e => { e.preventDefault(); zoom = Math.max(2, Math.min(60, zoom * (e.deltaY > 0 ? 1.2 : 1 / 1.2))); };
+window.onbeforeunload = e => { if (dirty) { e.preventDefault(); return ''; } };
+// Buttons and menus give the keyboard back once used, so the shortcuts keep working
+document.addEventListener('click', e => { if (e.target.closest('button')) e.target.closest('button').blur(); });
+document.addEventListener('change', e => { if (e.target.tagName === 'SELECT' || e.target.type === 'checkbox' || e.target.type === 'range') e.target.blur(); });
+document.addEventListener('keydown', e => {
+  if (!edit || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+  const k = e.key.toLowerCase();
+  if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); $('undo').click(); return; }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const handled = {
+    ' ': () => $('play').click(),
+    arrowleft: () => seek(position() - (e.shiftKey ? 10 : 2)),
+    arrowright: () => seek(position() + (e.shiftKey ? 10 : 2)),
+    t: () => { if (playing) { taps.push(heardAt(e.timeStamp)); showTaps(); } else status('Play the song, then tap T on each beat'); },
+    '[': () => shiftGrid(e.shiftKey ? -0.001 : -0.01), '{': () => shiftGrid(-0.001),
+    ']': () => shiftGrid(e.shiftKey ? 0.001 : 0.01), '}': () => shiftGrid(0.001),
+    b: setBar1, d: addDrop, u: setBuild, l: addLift, s: addSection, x: deleteMark,
+    '+': () => $('zoomIn').click(), '=': () => $('zoomIn').click(), '-': () => $('zoomOut').click(),
+  }[k];
+  if (handled) { e.preventDefault(); handled(); }
+});
+
+loadSongs().then(() => { if ($('song').value) openSong($('song').value); });
+pollLog();
+</script>
+</body>
+</html>

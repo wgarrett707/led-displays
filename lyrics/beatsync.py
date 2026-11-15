@@ -18,16 +18,25 @@ PENDING_DIR = BEATS_DIR + '/pending'
 PI_UID = 1000
 # WLED's audio sync (AudioReactive usermod, "send" mode)
 MULTICAST, PORT = '239.0.0.1', 11988
-# Heard song time = Spotify position + offset. Before the microphone has measured it:
-DEFAULT_OFFSET = -0.15
+# Heard song time = Spotify position + offset. The offset is mostly the speaker's delay, the same for
+# every song, so the room's usual offset is learned (ROOM_FILE) and each song's measurement is only
+# accepted within ROOM_RANGE beats of it: bass hits repeat every beat, so a match a whole beat away
+# can look almost as good as the right one. DEFAULT_OFFSET until anything has been learned.
+DEFAULT_OFFSET = -0.20
+ROOM_FILE = BEATS_DIR + '/room.json'
+ROOM_RANGE = 0.4
+# Matches at least this good teach the room offset
+ROOM_TEACH = 0.2
 # WLED hears, analyses and sends the sound this long after it happens
 MIC_LATENCY = 0.04
-# Microphone history compared against the song, and how far from the current offset to look
+# Microphone history compared against the song, and how far from the current offset to look once locked
 WINDOW = 20.0
-SEARCH = 0.6
 TRACK_SEARCH = 0.12
 # A seek (or a new play of the song) rather than a timing correction
 SEEK = 1.5
+# Spotify positions: each poll's (position - local time); the median of the last ANCHORS is the
+# song's start on the local clock, much steadier than any single poll
+ANCHORS = 15
 
 
 def log(message):
@@ -147,24 +156,55 @@ class BeatClock(threading.Thread):
         self.trackId = None
         self.analysis = None
         self.playback = None
-        self.offset = DEFAULT_OFFSET
         self.locked = False
         self.validFrom = 0.0
         self.candidate = None
         self.checked = 0.0
+        self.loadedAt = 0.0
+        self.anchors = collections.deque(maxlen=ANCHORS)
+        self.anchorTrack = None
+        self.roomSaved = 0.0
         for d in (BEATS_DIR, PENDING_DIR):
             if not os.path.isdir(d):
                 os.makedirs(d)
                 os.chown(d, PI_UID, PI_UID)
+        try:
+            with open(ROOM_FILE) as f:
+                self.room = float(json.load(f)['offset'])
+        except (OSError, ValueError, KeyError):
+            self.room = DEFAULT_OFFSET
+        self.offset = self.room
+
+    def observe(self, p):
+        # Every fresh Spotify poll (call from the polling thread, before any smoothing)
+        with self.lock:
+            if p is None or not p.playing:
+                self.anchors.clear()
+                return
+            anchor = p.progressMs / 1000.0 - p.at
+            if p.id != self.anchorTrack or (self.anchors and abs(anchor - float(np.median(self.anchors))) > SEEK):
+                # New song or a seek: start over
+                self.anchors.clear()
+                self.anchorTrack = p.id
+                self.locked, self.candidate = False, None
+                self.validFrom = time.monotonic()
+            self.anchors.append(anchor)
+
+    def songTime(self, now):
+        # Spotify's position at local time 'now' (s), from the median anchor (call with the lock held)
+        if self.anchors:
+            return float(np.median(self.anchors)) + now
+        return self.playback.position(now) / 1000.0
 
     def state(self, now, lead=0.0):
         # BeatState for local time 'now' (+ lead, to make up for output delay), or None when there's
         # nothing to follow (no analysis, nothing playing, paused)
         with self.lock:
             a, p, offset = self.analysis, self.playback, self.offset
-        if a is None or p is None or not p.playing:
-            return None
-        return BeatState(a, p.position(now + lead) / 1000.0 + offset)
+            if a is None or p is None or not p.playing:
+                return None
+            t = self.songTime(now + lead)
+        return BeatState(a, t + offset)
 
     def run(self):
         self.mic.start()
@@ -183,33 +223,32 @@ class BeatClock(threading.Thread):
             old = self.playback
             if p is None or p.id != self.trackId:
                 self.trackId = p.id if p else None
-                self.analysis, self.offset, self.locked, self.candidate = None, DEFAULT_OFFSET, False, None
-                self.validFrom, self.checked = now, 0.0
-            elif old is not None and p is not old:
-                # Spotify's position was re-anchored: keep the heard time continuous, unless it was a seek
-                jump = (p.position(now) - old.position(now)) / 1000.0
-                if abs(jump) > SEEK or p.playing != old.playing:
-                    self.validFrom = now
-                    if abs(jump) > SEEK:
-                        self.locked, self.candidate = False, None
-                else:
-                    self.offset -= jump
-                    self.validFrom = now
+                self.analysis, self.offset, self.locked, self.candidate = None, self.room, False, None
+                self.validFrom, self.checked, self.loadedAt = now, 0.0, 0.0
+            elif old is not None and p.playing != old.playing:
+                # Paused or resumed: microphone history from before doesn't line up
+                self.validFrom = now
             self.playback = p
-        if p is None or self.analysis is not None or now - self.checked < 5.0:
+        if p is None or now - self.checked < 5.0:
             return
         self.checked = now
         path = os.path.join(BEATS_DIR, p.id + '.json')
         if os.path.exists(path):
+            # (Re)load when new or changed: an edit saved from the PC applies straight away
+            changed = os.path.getmtime(path)
+            if changed == self.loadedAt:
+                return
             with open(path) as f:
                 data = json.load(f)
+            self.loadedAt = changed
             if data.get('error'):
                 return
             a = Analysis(data)
             with self.lock:
                 if self.trackId == p.id:
                     self.analysis = a
-            log('Beats for %s: %.1f BPM, %d drops' % (p.title, a.tempo, len(a.drops)))
+            log('Beats for %s: %.1f BPM, %d drops%s' % (p.title, a.tempo, len(a.drops),
+                                                       ' (edited)' if data.get('edited') else ''))
         else:
             pending = os.path.join(PENDING_DIR, p.id + '.json')
             if not os.path.exists(pending):
@@ -234,16 +273,24 @@ class BeatClock(threading.Thread):
         if heard.std() < 1e-6:
             return
         heard = (heard - heard.mean()) / heard.std()
-        song = p.progressMs / 1000.0 + (grid - p.at)
-        span = TRACK_SEARCH if locked else SEARCH
-        center = offset if locked else DEFAULT_OFFSET
-        lags = np.arange(center - span, center + span + 1e-9, 0.01)
+        with self.lock:
+            if len(self.anchors) < 3:
+                return    # wait for a steady position
+            song = float(np.median(self.anchors)) + grid
+        period = 60.0 / a.tempo
+        room = self.room
+        if locked:
+            lags = np.arange(offset - TRACK_SEARCH, offset + TRACK_SEARCH + 1e-9, 0.01)
+            lags = lags[np.abs(lags - room) <= ROOM_RANGE * period]
+        else:
+            lags = np.arange(room - ROOM_RANGE * period, room + ROOM_RANGE * period + 1e-9, 0.01)
+        if len(lags) < 3:
+            return
         ref = a.envAt(song[None, :] + lags[:, None])
         ref = (ref - ref.mean(1, keepdims=True)) / np.maximum(ref.std(1, keepdims=True), 1e-6)
         corr = (ref * heard[None, :]).mean(1)
         best = int(np.argmax(corr))
         # The runner-up at least a third of a beat away: when it's about as good, the match is ambiguous
-        period = 60.0 / a.tempo
         far = np.abs(lags - lags[best]) > period / 3
         second = corr[far].max() if far.any() else -1.0
         good = corr[best] > 0.12 and corr[best] - second > 0.02
@@ -265,6 +312,18 @@ class BeatClock(threading.Thread):
                 # First lock: two measurements in a row that agree
                 if self.candidate is not None and abs(found - self.candidate) < 0.03:
                     self.offset, self.locked, self.candidate = found, True, None
-                    log('Beat clock locked: offset %+.0f ms (match %.2f)' % (found * 1000, corr[best]))
+                    log('Beat clock locked: offset %+.0f ms (match %.2f, room %+.0f ms)' % (
+                        found * 1000, corr[best], self.room * 1000))
                 else:
                     self.candidate = found
+            if self.locked and corr[best] >= ROOM_TEACH:
+                # A clear match: the room's usual offset moves a little towards it
+                self.room += 0.1 * (self.offset - self.room)
+                if now - self.roomSaved > 60:
+                    self.roomSaved = now
+                    try:
+                        with open(ROOM_FILE, 'w') as f:
+                            json.dump({'offset': round(self.room, 4)}, f)
+                        os.chown(ROOM_FILE, PI_UID, PI_UID)
+                    except OSError:
+                        pass

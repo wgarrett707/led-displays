@@ -151,6 +151,8 @@ def pollSpotify(spotify, state):
     while True:
         try:
             playback = spotify.currentlyPlaying()
+            if beatClock is not None:
+                beatClock.observe(playback)
             with state.lock:
                 old = state.playback
                 if (playback and old and playback.id == old.id and playback.playing and old.playing
@@ -291,6 +293,7 @@ def pickEffect(count):
 
 
 state = State()
+beatClock = None
 if not all(k in KEYS for k in ('spotify_client_id', 'spotify_client_secret', 'spotify_refresh_token')):
     log('Spotify is not connected yet: run spotify_auth.py on your PC.')
     show(layout.message('Run spotify_auth.py to connect Spotify'))

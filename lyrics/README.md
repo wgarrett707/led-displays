@@ -80,10 +80,19 @@ The lights follow each song's real beat instead of assuming 120 BPM.
   a bass onset envelope. Results go to `beats/<Spotify id>.json` on the Pi.
   `watch.bat` (or `analyze.py watch`) picks up songs the Pi has played without an analysis
   (`beats/pending/`); `analyze.py playlist <link>` / `album <link>` / `track <link>` do them ahead of time.
+- **Editor** (`pc/editor.py`, `editor.bat`): a page on the PC for fixing a song by ear. Plays the song with
+  a click track on the beat grid (high click on bar 1); tap along with T to check or rebuild the grid;
+  nudge it 10 ms at a time; tempo x2 / /2; set bar 1 (B), drops (D), build-up starts (U), lifts (L) and
+  sections (S); per section: label, chorus, strip pattern (pulses, breathe, chase, sparkle, rainbow,
+  solid, strobe, off) and colours. Save sends it to the Pi, which reloads it within seconds;
+  hand-edited songs are never overwritten by the automatic analysis.
 - **`beatsync.py`**: the beat clock. Song time = Spotify's position + an offset, measured by matching the
   bass hits WLED's microphone hears (its UDP audio sync, multicast 239.0.0.1:11988, "send" mode) against
   the song's bass envelope every second; that covers the Bluetooth speaker's delay and Spotify's
-  polling error. `DEFAULT_OFFSET` until it locks; `MIC_LATENCY` for WLED's own delay.
+  polling error. Spotify's position is the median over its last 15 polls. The offset is mostly the
+  speaker's delay, the same for every song, so the room's usual offset is learned (`beats/room.json`)
+  and a song's match is only accepted within 0.4 beat of it (a match a whole beat off can look almost as
+  good). `MIC_LATENCY` is WLED's own delay. `beattest.py` shows a plain metronome for checking it.
 - **Matrix**: every beat-synced effect uses the real beat (`effects.BEAT`, bar lines on multiples of 4);
   a drop gives one white hit. Without an analysis they count 120 BPM as before.
 - **`strips.py`**: draws both strips (by distance from the matrix) and streams them to WLED over DDP.

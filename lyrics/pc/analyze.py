@@ -25,7 +25,7 @@ AUDIO_DIR = os.path.join(HERE, 'audio')
 OUT_DIR = os.path.join(HERE, 'analysis')
 PI = os.environ.get('LED_PI', 'pi@willpi')
 PI_BEATS = '/home/pi/led-scripts/lyrics/beats'
-VERSION = 1
+VERSION = 2
 
 SR = 22050
 HOP = 256                 # ~11.6 ms analysis frames
@@ -137,21 +137,58 @@ def _sync(data, starts):
     return out
 
 
+# Without a tempo from Deezer, a tempo below this is taken to be half the felt beat (a 132 BPM song
+# counted at 66) and tracked again at double
+SLOW = 78
+
+
 def beatGrid(y, bpmHint):
     onset = librosa.onset.onset_strength(y=y, sr=SR, hop_length=HOP, aggregate=np.median)
-    tempo, beats = librosa.beat.beat_track(onset_envelope=onset, sr=SR, hop_length=HOP,
-                                           start_bpm=bpmHint or 120.0, tightness=300 if bpmHint else 100,
-                                           trim=False, units='time')
-    tempo = float(np.atleast_1d(tempo)[0])
-    beats = np.asarray(beats, float)
+
+    def track(start, tightness):
+        tempo, beats = librosa.beat.beat_track(onset_envelope=onset, sr=SR, hop_length=HOP, start_bpm=start,
+                                               tightness=tightness, trim=False, units='time')
+        return float(np.atleast_1d(tempo)[0]), np.asarray(beats, float)
+
+    tempo, beats = track(bpmHint or 120.0, 300 if bpmHint else 100)
+    if not bpmHint and tempo < SLOW:
+        fast, fastBeats = track(tempo * 2, 100)
+        if fast > 1.6 * tempo:
+            tempo, beats = fast, fastBeats
     if len(beats) < 8:
         raise ValueError('no steady beat found')
-    # Extend the grid to the whole song at the median spacing, so the clock always has a beat
+    return extendGrid(beats, len(y) / SR)
+
+
+def extendGrid(beats, duration):
+    # Extend a beat grid to the whole song at its median spacing, so the clock always has a beat.
+    # Returns (beats, tempo, index of the first original beat)
+    beats = np.asarray(beats, float)
     period = float(np.median(np.diff(beats)))
-    duration = len(y) / SR
     before = np.arange(beats[0] - period, -period / 2, -period)[::-1]
     after = np.arange(beats[-1] + period, duration + period / 2, period)
-    return np.concatenate([before[before >= 0], beats, after[after <= duration]]), 60.0 / period, len(before[before >= 0])
+    before = before[before >= 0]
+    return np.concatenate([before, beats, after[after <= duration]]), 60.0 / period, len(before)
+
+
+def beatFeatures(y, beats, harmonic=None):
+    # Per-beat loudness and bass (0..1), and the melody note on each half beat (-1 when unclear).
+    # Separate from analyze() so the editor can redo them for a corrected beat grid.
+    beats = np.asarray(beats, float)
+    beatFrames = librosa.time_to_frames(beats, sr=SR, hop_length=HOP)
+    mel = librosa.feature.melspectrogram(y=y, sr=SR, hop_length=HOP, n_mels=64, fmax=8000)
+    melFreqs = librosa.mel_frequencies(n_mels=64, fmax=8000)
+    if harmonic is None:
+        # Separating out the drums takes most of a minute; the editor goes without (notes a bit noisier)
+        harmonic = y
+    lead = librosa.feature.chroma_cqt(y=harmonic, sr=SR, hop_length=HOP, fmin=librosa.note_to_hz('C4'), n_octaves=3)
+    halves = np.sort(np.concatenate([beats, (beats[:-1] + beats[1:]) / 2]))
+    leadSync = _sync(lead, librosa.time_to_frames(halves, sr=SR, hop_length=HOP))
+    clarity = leadSync.max(0) / np.maximum(leadSync.sum(0), 1e-9)
+    notes = np.where(clarity > 0.16, leadSync.argmax(0), -1)
+    return {'beatEnergy': [round(float(v), 2) for v in _norm(_sync(_db(mel.sum(0)), beatFrames))],
+            'beatBass': [round(float(v), 2) for v in _norm(_sync(_db(mel[melFreqs < 160].sum(0)), beatFrames))],
+            'notes': [int(n) for n in notes]}
 
 
 def analyze(y, bpmHint=None):
@@ -167,13 +204,10 @@ def analyze(y, bpmHint=None):
     bass = _db(mel[melFreqs < 160].sum(0))
     bassOnset = librosa.onset.onset_strength(S=librosa.power_to_db(mel[melFreqs < 160]), sr=SR, hop_length=HOP)
 
-    beatLoud = _sync(loud, beatFrames)
-    beatBass = _sync(bass, beatFrames)
     beatKick = np.array([bassOnset[max(0, f - 2):f + 3].max() if f < len(bassOnset) else 0 for f in beatFrames])
 
     # Chords (for bar lines and sections) and the upper register (melody notes)
     chroma = librosa.feature.chroma_cqt(y=harmonic, sr=SR, hop_length=HOP)
-    lead = librosa.feature.chroma_cqt(y=harmonic, sr=SR, hop_length=HOP, fmin=librosa.note_to_hz('C4'), n_octaves=3)
     beatChroma = _sync(chroma, beatFrames)
     change = np.zeros(len(beats))
     unit = beatChroma / np.maximum(np.linalg.norm(beatChroma, axis=0), 1e-9)
@@ -197,32 +231,25 @@ def analyze(y, bpmHint=None):
     sections = findSections(feats, barLoud, barTimes, duration)
     drops, lifts = findDrops(barTimes, barLoud, barBass, sections, beats, loud)
 
-    # Melody: the strongest upper-register note on each half beat (-1 when nothing clear)
-    halves = np.sort(np.concatenate([beats, (beats[:-1] + beats[1:]) / 2]))
-    leadSync = _sync(lead, librosa.time_to_frames(halves, sr=SR, hop_length=HOP))
-    clarity = leadSync.max(0) / np.maximum(leadSync.sum(0), 1e-9)
-    notes = np.where(clarity > 0.16, leadSync.argmax(0), -1)
-
     # Bass onset envelope at ENV_RATE for lining up with the live microphone
     envHop = SR // ENV_RATE
     envMel = librosa.feature.melspectrogram(y=y, sr=SR, hop_length=envHop, n_mels=24, fmin=30, fmax=250)
     env = librosa.onset.onset_strength(S=librosa.power_to_db(envMel), sr=SR, hop_length=envHop)
     env = np.round(_norm(env, 1, 99.5) * 255).astype(np.uint8)
 
-    return {
+    result = {
         'tempo': round(tempo, 2),
         'beats': [round(float(t), 3) for t in beats],
         'firstBeat': int(firstReal),
         'downbeat': phase,
-        'beatEnergy': [round(float(v), 2) for v in _norm(beatLoud)],
-        'beatBass': [round(float(v), 2) for v in _norm(beatBass)],
         'sections': sections,
         'drops': drops,
         'lifts': lifts,
-        'notes': [int(n) for n in notes],
         'envRate': ENV_RATE,
         'env': base64.b64encode(env.tobytes()).decode(),
     }
+    result.update(beatFeatures(y, beats, harmonic))
+    return result
 
 
 def findSections(feats, barLoud, barTimes, duration):
@@ -320,12 +347,13 @@ def analyzeTrack(track, force=False):
     if os.path.exists(out) and not force:
         with open(out) as f:
             result = json.load(f)
-        if result.get('version') == VERSION:
+        # Hand-edited songs (editor.py) are never replaced by a fresh analysis
+        if result.get('version') == VERSION or result.get('edited'):
             return result
     name = '%s - %s' % (track['artists'][0], track['title'])
     started = time.time()
     result = {'version': VERSION, 'id': track['id'], 'title': track['title'], 'artist': ', '.join(track['artists']),
-              'durationMs': track['durationMs']}
+              'durationMs': track['durationMs'], 'isrc': track.get('isrc')}
     source = findAudio(track)
     if not source:
         log('%s: no YouTube upload of the same length' % name)
