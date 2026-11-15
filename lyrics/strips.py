@@ -32,6 +32,18 @@ FLASH_ON = 0.05
 PALETTES = [(205, 265), (165, 215), (265, 320), (25, 50), (95, 160), (330, 375), (185, 240), (45, 110)]
 HOT = (310, 400)
 GAMMA = 2.2
+# Calmer look: a steady glow in the section's colours (AMBIENT, a little more in loud parts) under
+# everything, with the effects on top scaled by OVERLAY and run through a soft limiter that tops out at
+# CEILING, so a pulse is a few times brighter than the glow rather than full white on black. Drops,
+# the strobe pattern and 'off' are left as they are; build-ups climb back to full contrast by the drop.
+AMBIENT = 0.34
+AMBIENT_ENERGY = 0.10
+OVERLAY = 0.9
+CEILING = 1.0
+# Sections quieter than this (0-1, relative to the rest of the song) get a calm pattern unless one was
+# chosen in the editor
+CALM_BELOW = 0.35
+CALM_PATTERN = 'drift'
 # Chart notes held longer than this (s) are looked for no further back
 NOTE_HOLD_MAX = 8.0
 
@@ -117,8 +129,14 @@ class Strips(threading.Thread):
         hues = self.palette(st)
         level = 0.35 + 0.65 * st.energy
         a = self.clock.analysis
-        # Songs with a Clone Hero chart play its notes unless the section's pattern was set in the editor
-        pattern = st.section.get('pattern') or ('notes' if a is not None and a.hasNotes else 'pulses')
+        # The section's pattern from the editor; otherwise a calm one for quiet sections, else the song's
+        # Clone Hero chart notes when it has a chart, else beat pulses
+        pattern = st.section.get('pattern')
+        if not pattern:
+            if st.section.get('energy', 1.0) < CALM_BELOW and st.build is None:
+                pattern = CALM_PATTERN
+            else:
+                pattern = 'notes' if a is not None and a.hasNotes else 'pulses'
         if st.build is not None and pattern != 'off':
             self.buildUp(out, st, hues, level)
         else:
@@ -128,6 +146,9 @@ class Strips(threading.Thread):
             # A lift (a big entrance that isn't quite a drop): one wide wave of colour
             self.pulse(out, st.sinceLift / (st.period * CROSS_BEATS) * LONGEST * 1.2, rgb(hues[1], 0.6, 1.0), width=25, tail=60)
 
+        if pattern not in ('off', 'strobe'):
+            out = self.soften(out, st, hues)
+
         if st.sinceDrop is not None:
             beatsSince = st.sinceDrop / st.period
             out += math.exp(-st.sinceDrop / 0.3) * 1.2   # white hit
@@ -136,6 +157,17 @@ class Strips(threading.Thread):
                 if int(math.floor(beatsSince)) % every == 0 and (beatsSince % 1.0) * st.period < FLASH_ON:
                     out = np.maximum(out, 0.9)
         return out
+
+    def soften(self, out, st, hues):
+        # The glow under everything, the effects brought closer to it, and a soft limiter on top. A
+        # build-up climbs back to full contrast as its drop gets close.
+        p = st.build ** 2 if st.build is not None else 0.0
+        gain = OVERLAY + (1 - OVERLAY) * p
+        ceiling = CEILING + (1.2 - CEILING) * p
+        mix = (self.d / LONGEST)[:, None]
+        glow = (1 - mix) * rgb(hues[0], 0.8, 1.0) + mix * rgb(hues[1], 0.8, 1.0)
+        out = glow * (AMBIENT + AMBIENT_ENERGY * st.energy) + gain * out
+        return ceiling * (1 - np.exp(-out / ceiling))
 
     def noteHue(self, hues, note):
         return hues[0] + (hues[1] - hues[0]) * (note / 11.0) if note >= 0 else hues[0]
@@ -268,6 +300,37 @@ class Strips(threading.Thread):
         out += rgb(hues[0], 0.9, 0.03)
         if k % every == 0 and (st.beat - k) * st.period < FLASH_ON:
             out[:] = np.maximum(out, 0.9)
+
+    # ------------------------------------------------------------ calm patterns (quiet sections get one by default)
+
+    def draw_drift(self, out, st, hues, level):
+        # The section's two colours in long bands drifting slowly out from the matrix (one band every
+        # 8 bars), swelling very slightly on each bar
+        pos = self.d / LONGEST * 1.5 - st.beat / 32.0
+        f = (0.5 + 0.5 * np.sin(2 * np.pi * pos))[:, None]
+        swell = 0.85 + 0.15 * math.exp(-(st.beat % 4.0) * 1.5)
+        out += ((1 - f) * rgb(hues[0], 0.85, 1.0) + f * rgb(hues[1], 0.85, 1.0)) * (0.45 * level * swell)
+
+    def draw_waves(self, out, st, hues, level):
+        # A soft, wide wave rolls out from the matrix on each bar, alternating between the two colours
+        bar = st.beat / 4.0
+        for k in range(int(math.floor(bar)) - 2, int(math.floor(bar)) + 1):
+            age = bar - k
+            if age < 0:
+                continue
+            pos = age * LONGEST / 1.5
+            color = rgb(hues[k % 2], 0.8, 0.45 * level * max(0.0, 1 - age / 2.5))
+            out += np.exp(-((self.d - pos) / 35.0) ** 2)[:, None] * color
+
+    def draw_aurora(self, out, st, hues, level):
+        # Slow shimmering curtains in the section's colours, like the northern lights; barely follows the beat
+        t = st.time
+        d = self.d / LONGEST
+        v = (np.sin(2 * np.pi * (d * 2.3 + t * 0.07)) + np.sin(2 * np.pi * (d * 5.1 - t * 0.11))
+             + 0.6 * np.sin(2 * np.pi * (d * 9.7 + t * 0.17)))
+        bright = np.clip(0.5 + v / 5.2, 0, 1) ** 1.5
+        hue = hues[0] + (hues[1] - hues[0]) * np.clip(0.5 + np.sin(2 * np.pi * (d * 1.3 - t * 0.05)) / 2, 0, 1)
+        out += hsvArray(hue, 0.8, 1.0) * (bright * 0.5 * level)[:, None]
 
     def draw_off(self, out, st, hues, level):
         pass

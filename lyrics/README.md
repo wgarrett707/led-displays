@@ -119,7 +119,12 @@ The lights follow each song's real beat instead of assuming 120 BPM.
   leaves empty fall back to beat pulses. Both strips have 224 LEDs (WLED outputs 0-223 and 224-447),
   fed from the far end; the last LEDs at the matrix end curve onto the other wall and stay dark, so the
   lights start from the corner (strip 1 lit up to LED 207, strip 2 up to 205: `STRIPS`). WLED's segments
-  and presets cover the same LEDs. A drop is a white hit then a strobe on the beat for
+  and presets cover the same LEDs. Everything sits on a steady glow in the section's colours (`AMBIENT`)
+  with the effects scaled down (`OVERLAY`) and through a soft limiter (`CEILING`), so pulses peak at about
+  3x the glow instead of full white on black; build-ups climb back to full contrast by the drop. Quiet
+  sections (energy under `CALM_BELOW`) get a calm pattern (`drift`) unless one is set in the editor;
+  calm patterns: `drift` (long colour bands drifting outward), `waves` (a soft wide wave each bar),
+  `aurora` (slow shimmering curtains). A drop is a white hit then a strobe on the beat for
   `DROP_STROBE_BARS` bars, never above `MAX_FLASHES` a second. With no analysis, or paused, it stops
   sending and WLED's own audio-reactive playlist (preset 20) takes over again.
 
