@@ -41,9 +41,9 @@
   <button id="save" class="primary" disabled>Save to lights</button>
 </header>
 <main>
-  <canvas id="overview" height="70" aria-label="Whole song"></canvas>
-  <canvas id="detail" height="210" aria-label="Zoomed view around the playhead"></canvas>
-  <canvas id="preview" height="22" aria-label="Rough preview of the strips"></canvas>
+  <canvas id="overview" data-h="70" style="height:70px" aria-label="Whole song"></canvas>
+  <canvas id="detail" data-h="210" style="height:210px" aria-label="Zoomed view around the playhead"></canvas>
+  <canvas id="preview" data-h="22" style="height:22px" aria-label="Rough preview of the strips"></canvas>
 
   <div class="box row">
     <button id="play" title="Space">&#9654; Play</button>
@@ -331,7 +331,12 @@ $('secPattern').onchange = () => { const s = sectionAt(position()); act(null, ()
 $('secColors').onchange = () => { const s = sectionAt(position()); act(null, () => { const v = $('secColors').value; s.hues = v ? v.split(',').map(Number) : undefined; }); };
 
 // ---------------------------------------------------------------- drawing
-function sizeCanvas(c) { const r = devicePixelRatio || 1, w = c.clientWidth * r, h = c.getAttribute('height') * r; if (c.width !== w || c.height !== h) { c.width = w; c.height = h; c.style.height = c.getAttribute('height') + 'px'; } return [c.getContext('2d'), w, h, r]; }
+// Each canvas keeps its CSS height fixed (from data-h); only its pixel buffer follows the screen's scaling
+function sizeCanvas(c) {
+  const r = devicePixelRatio || 1, cssH = +c.dataset.h, w = Math.round(c.clientWidth * r), h = Math.round(cssH * r);
+  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+  return [c.getContext('2d'), w, h, r];
+}
 
 function drawWave(g, x0, x1, t0, t1, top, h, color) {
   const pk = song.peaks, rate = song.peaksRate, w = x1 - x0;
@@ -397,7 +402,7 @@ function draw() {
   // Rough strip preview: flashes on the beat in the section's colours; white on drops
   [g, w, h, r] = sizeCanvas($('preview'));
   const i = Math.max(0, firstAfter(pos) - 1), since = pos - b[i], s = sectionAt(pos), [ha, hb] = hues(s);
-  let level = Math.exp(-since * 6) * (isBar(i) ? 1 : 0.7);
+  let level = since < 0 ? 0 : Math.exp(-since * 6) * (isBar(i) ? 1 : 0.7);   // nothing before the first beat
   let light = 10 + 45 * level, sat = 90;
   const build = edit.drops.find(d => d.buildStart <= pos && pos < d.time);
   if (build) { const p = (pos - build.buildStart) / (build.time - build.buildStart); sat = 90 - 80 * p; light = 15 + 50 * p * level + 10 * p; }
