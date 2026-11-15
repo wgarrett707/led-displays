@@ -147,7 +147,7 @@ def _notes(tm, raw, sustain=True):
 
 
 def readMid(data):
-    m = mido.MidiFile(file=io.BytesIO(data))
+    m = mido.MidiFile(file=io.BytesIO(data), clip=True)   # some charts have out-of-range bytes
     tempos, tracks = [], []
     for tr in m.tracks:
         tick, evs = 0, []
