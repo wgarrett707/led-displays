@@ -116,10 +116,10 @@ The lights follow each song's real beat instead of assuming 120 BPM.
   for them): each guitar note (else keys / bass) leaves the matrix as a pulse coloured by its lane, held
   notes trail a streak while held, kicks swell the strip near the matrix, snares lift the whole strip
   (each at most ~3 a second, `beatsync.ACCENT_GAP`), hi-hats and cymbals sparkle; stretches the chart
-  leaves empty fall back to beat pulses. Everything is drawn over the longer strip's 440 LEDs and fitted
-  to each strip's own length (the 224-LED strip takes the brightest of each pair), since both strips run
-  about the same distance out with different LED spacing; drawn LED for LED, the long side lagged behind
-  the short one. A drop is a white hit then a strobe on the beat for
+  leaves empty fall back to beat pulses. Both strips have 224 LEDs (WLED outputs 0-223 and 224-447),
+  fed from the far end; the last LEDs at the matrix end curve onto the other wall and stay dark, so the
+  lights start from the corner (strip 1 lit up to LED 207, strip 2 up to 205: `STRIPS`). WLED's segments
+  and presets cover the same LEDs. A drop is a white hit then a strobe on the beat for
   `DROP_STROBE_BARS` bars, never above `MAX_FLASHES` a second. With no analysis, or paused, it stops
   sending and WLED's own audio-reactive playlist (preset 20) takes over again.
 

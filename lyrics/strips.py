@@ -15,13 +15,14 @@ DDP_PORT = 4048
 FPS = 42
 # Frames are drawn this far ahead to make up for the network and WLED's own frame
 LEAD = 0.03
-# Both strips are fed from their far ends: (first LED, LED count); the last LED is at the matrix.
-# They run about the same distance out from the matrix with different LED spacing, so everything is
-# drawn over LONGEST LEDs and fitted to each strip's own length.
-STRIPS = [(0, 224), (224, 440)]
-LONGEST = max(n for s, n in STRIPS)
+# Both strips are fed from their far ends: (first LED, LEDs on the strip, LEDs on the main wall). The
+# last LEDs of each (the matrix end) curve round onto the other wall and are left dark, so the lights
+# start from the corner: strip 1 is lit up to its LED 207, strip 2 up to its LED 205. Both strips have
+# the same LED spacing, so they're drawn LED for LED and mirror each other.
+STRIPS = [(0, 224, 207), (224, 224, 205)]
+LONGEST = max(lit for s, n, lit in STRIPS)
 # Pulses cross the longest strip in this many beats
-CROSS_BEATS = 2.5
+CROSS_BEATS = 1.25
 # After a drop: a white hit, then a strobe on the beat for this many bars (0 = no strobe).
 # Never faster than MAX_FLASHES a second (every other beat for fast songs).
 DROP_STROBE_BARS = 2
@@ -62,10 +63,7 @@ class Strips(threading.Thread):
         self.d = np.arange(LONGEST, dtype=np.float32)   # distance from the matrix, in LEDs
         # Where each drum hit's sparkles land (the same LEDs every time the hit plays)
         self.spots = np.random.RandomState(1).randint(0, LONGEST, (4096, 40))
-        # Each strip shows the whole picture over its own length, so both sides mirror each other even
-        # though one has more LEDs: a shorter strip takes the brightest of the LEDs it stands for
-        self.pool = {n: np.linspace(0, LONGEST, n + 1).round().astype(int)[:-1] for s, n in STRIPS if n < LONGEST}
-        self.raw = np.zeros((sum(n for s, n in STRIPS), 3), np.uint8)
+        self.raw = np.zeros((sum(n for s, n, lit in STRIPS), 3), np.uint8)   # the curved LEDs stay 0
 
     def run(self):
         frame = 1.0 / FPS
@@ -279,9 +277,8 @@ class Strips(threading.Thread):
     def send(self, frame):
         # Map distance-from-matrix to each strip's own LED order, gamma-correct, and send over DDP
         values = (np.clip(frame, 0, 1) ** GAMMA * 255).astype(np.uint8)
-        for start, n in STRIPS:
-            strip = np.maximum.reduceat(values, self.pool[n], axis=0) if n in self.pool else values
-            self.raw[start:start + n] = strip[::-1]
+        for start, n, lit in STRIPS:
+            self.raw[start:start + lit] = values[:lit][::-1]
         data = self.raw.tobytes()
         ip = getattr(self.clock.mic, 'source', None) or WLED_IP
         self.seq = self.seq % 15 + 1
