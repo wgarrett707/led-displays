@@ -81,7 +81,7 @@ The lights follow each song's real beat instead of assuming 120 BPM.
   loudest repeated one is the chorus), drops and their build-ups, a melody note per half beat, and
   a bass onset envelope. Results go to `beats/<Spotify id>.json` on the Pi.
   `watch.bat` (or `analyze.py watch`) picks up songs the Pi has played without an analysis
-  (`beats/pending/`); `analyze.py playlist <link>` / `album <link>` / `track <link>` do them ahead of time.
+  (`beats/pending/`); `analyze.py playlist <link>` (yours or public; read through the Pi's Spotify login, since Spotify only lists a playlist's songs to a signed-in user) / `album <link>` / `track <link>` do them ahead of time.
 - **Editor** (`pc/editor.py`, `editor.bat`): a page on the PC for fixing a song by ear. Plays the song with
   a click track on the beat grid (high click on bar 1); tap along with T for ~20 s, then "New grid from my
   taps" fits a steady tempo to the taps and lines it up exactly with the audio for the whole song (taps

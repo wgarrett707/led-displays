@@ -3,7 +3,7 @@
 #
 #   python analyze.py watch                 analyse songs the Pi has asked for, as they come in
 #   python analyze.py track <Spotify link>  analyse particular songs now
-#   python analyze.py playlist <link>       analyse a whole (public) playlist ahead of a party
+#   python analyze.py playlist <link>       analyse a whole playlist ahead of a party
 #
 # Audio comes from YouTube (yt-dlp), matched to the Spotify track by title, artist and length.
 import argparse
@@ -475,6 +475,46 @@ def spotifySession():
     return s
 
 
+def userSession():
+    # Spotify access as the Pi's logged-in user. Spotify only lists a playlist's songs to a signed-in
+    # user, not to the app on its own. The token comes from the Pi's own Spotify code, so if Spotify
+    # hands out a new login token it's saved where the lyrics display looks for it.
+    token = ssh('cd /home/pi/led-scripts/lyrics && /usr/local/bin/python3 -c "import json, spotify; '
+                's = spotify.Spotify(json.load(open(\'/home/pi/led-scripts/apikeys.json\'))); s._refresh(); '
+                'print(s.accessToken)"').decode().strip()
+    s = requests.Session()
+    s.headers['Authorization'] = 'Bearer ' + token
+    return s
+
+
+def linkTracks(text):
+    # Every song in the Spotify track / album / playlist links in 'text'
+    app, user = spotifySession(), None
+    tracks = []
+    for kind, sid in re.findall(r'(track|album|playlist)[/:]([A-Za-z0-9]{22})', text):
+        if kind == 'track':
+            tracks.append(trackInfo(app.get('https://api.spotify.com/v1/tracks/' + sid, timeout=10).json()))
+            continue
+        if kind == 'playlist':
+            user = user or userSession()
+            s, url = user, 'https://api.spotify.com/v1/playlists/%s/items?limit=50' % sid
+        else:
+            s, url = app, 'https://api.spotify.com/v1/albums/%s/tracks?limit=50' % sid
+        while url:
+            page = s.get(url, timeout=10).json()
+            if 'error' in page:
+                message = page['error'].get('message', page['error']) if isinstance(page['error'], dict) else page['error']
+                raise RuntimeError('Spotify %s %s: %s' % (kind, sid, message))
+            for entry in page['items']:
+                item = entry.get('item') or entry.get('track') or entry
+                if kind == 'album':
+                    item = app.get('https://api.spotify.com/v1/tracks/' + item['id'], timeout=10).json()
+                if item and item.get('id') and item.get('type') == 'track':
+                    tracks.append(trackInfo(item))
+            url = page.get('next')
+    return tracks
+
+
 def trackInfo(item):
     return {'id': item['id'], 'title': item['name'], 'artists': [a['name'] for a in item['artists']],
             'album': item['album']['name'], 'durationMs': item['duration_ms'],
@@ -517,25 +557,7 @@ def main():
     a = p.parse_args()
     if a.mode == 'watch':
         return watch()
-    s = spotifySession()
-    tracks = []
-    for link in a.links:
-        sid = spotifyId(link)
-        if a.mode == 'track':
-            tracks.append(trackInfo(s.get('https://api.spotify.com/v1/tracks/' + sid, timeout=10).json()))
-        else:
-            url = 'https://api.spotify.com/v1/%ss/%s/tracks?limit=50' % (a.mode, sid)
-            while url:
-                page = s.get(url, timeout=10).json()
-                if 'error' in page:
-                    sys.exit('Spotify: %s' % page['error'])
-                for entry in page['items']:
-                    item = entry.get('track', entry)
-                    if a.mode == 'album':
-                        item = s.get('https://api.spotify.com/v1/tracks/' + item['id'], timeout=10).json()
-                    if item and item.get('id') and item.get('type') == 'track':
-                        tracks.append(trackInfo(item))
-                url = page.get('next')
+    tracks = linkTracks(' '.join(a.links))
     log('%d track(s)' % len(tracks))
     run(tracks, push=not a.no_push)
 

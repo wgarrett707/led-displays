@@ -140,25 +140,7 @@ def analyzeLinks(text):
     # Spotify track / album / playlist links, analysed in the background
     def work():
         try:
-            s = analyze.spotifySession()
-            tracks = []
-            for link in re.findall(r'(?:track|album|playlist)[/:][A-Za-z0-9]{22}', text):
-                kind, sid = re.split(r'[/:]', link)
-                if kind == 'track':
-                    tracks.append(analyze.trackInfo(s.get('https://api.spotify.com/v1/tracks/' + sid, timeout=10).json()))
-                    continue
-                url = 'https://api.spotify.com/v1/%ss/%s/tracks?limit=50' % (kind, sid)
-                while url:
-                    page = s.get(url, timeout=10).json()
-                    if 'error' in page:
-                        raise RuntimeError('Spotify: %s' % page['error'].get('message', page['error']))
-                    for entry in page['items']:
-                        item = entry.get('track', entry)
-                        if kind == 'album':
-                            item = s.get('https://api.spotify.com/v1/tracks/' + item['id'], timeout=10).json()
-                        if item and item.get('id') and item.get('type') == 'track':
-                            tracks.append(analyze.trackInfo(item))
-                    url = page.get('next')
+            tracks = analyze.linkTracks(text)
             note('Analysing %d song(s)...' % len(tracks))
             for i, track in enumerate(tracks):
                 try:
