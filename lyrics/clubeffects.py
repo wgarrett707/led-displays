@@ -4,7 +4,7 @@ import math
 import random
 import numpy as np
 from PIL import Image
-from effects import Effect, Text, H, W, YY, XX, YI, XI, BPM, RAINBOW, gradient, paint, shift
+from effects import Effect, Text, H, W, YY, XX, YI, XI, BPM, RAINBOW, gradient, paint, shift, beatCount
 from moreeffects import beatPhase, beatNumber, additive
 from partyeffects import PARTY, fadeIn
 
@@ -13,7 +13,7 @@ STROBE_FLASHES_PER_BEAT = 2
 
 
 def beats(t):
-    return t * BPM / 60.0
+    return beatCount(t)
 
 
 def kick(t, sharpness=6.0):

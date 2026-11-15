@@ -8,8 +8,15 @@ from PIL import ImageFilter
 
 H, W = 32, 256
 YY, XX = [a.astype(np.float32) for a in np.mgrid[0:H, 0:W]]
-# Most effects assume a party-typical 120 BPM (Spotify no longer gives new apps tempo data)
+# Without a song's real beat, effects assume a party-typical 120 BPM
 BPM = 120.0
+# The beat count (float) for the frame being drawn, set by lyrics.py when the song's beats are
+# known (beatsync); beat 0, 4, 8... are bar lines. None: effects count beats at BPM themselves.
+BEAT = None
+
+
+def beatCount(t):
+    return BEAT if BEAT is not None else t * BPM / 60.0
 
 
 def gradient(stops, n=256):
@@ -217,7 +224,7 @@ class Neon(Effect):
 
     def render(self, f):
         color = np.array(NEON[f.line % len(NEON)], np.float32)
-        beat = (f.t * BPM / 60.0) % 1.0
+        beat = beatCount(f.t) % 1.0
         pulse = 0.45 + 0.35 * math.exp(-beat * 4)
         step = int(f.age / 0.045)
         on = self.FLICKER[step] if step < len(self.FLICKER) else 1.0
@@ -361,7 +368,7 @@ class Equalizer(Effect):
         self.bass = np.linspace(1, 0, self.BARS) ** 2
 
     def render(self, f):
-        beat = (f.t * BPM / 60.0) % 1.0
+        beat = beatCount(f.t) % 1.0
         kick = math.exp(-beat * 6)
         self.target = 0.55 * self.target + 0.45 * np.random.uniform(0.1, 1.0, self.BARS) ** 1.2
         goal = np.clip(self.target + kick * self.bass * 0.9, 0, 1)

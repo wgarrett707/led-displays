@@ -1,0 +1,5 @@
+librosa
+soundfile
+yt-dlp
+requests
+pillow

@@ -24,6 +24,7 @@ class Playback:
         self.title = item['name']
         self.artists = [a['name'] for a in item['artists']]
         self.album = item['album']['name']
+        self.isrc = item.get('external_ids', {}).get('isrc')
         self.durationMs = item['duration_ms']
         self.progressMs = progressMs
         self.playing = playing

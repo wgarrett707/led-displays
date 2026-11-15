@@ -7,6 +7,7 @@ lp.recordPID('lyrics', str(os.getpid()))
 import json
 KEYS = json.load(open('/home/pi/led-scripts/apikeys.json'))
 import bisect
+import math
 import sys
 import threading
 import time
@@ -20,6 +21,8 @@ import moreeffects
 import partyeffects
 import clubeffects
 import brat
+import beatsync
+import strips
 from spotify import Spotify, RateLimited
 
 # Lines appear this much before their timestamp; Spotify's reported position trails the audio
@@ -40,6 +43,8 @@ SCROLL_HOLD_MS = 800
 FRAME_TIME = 0.025
 # While paused, the last frame stays up at this brightness
 PAUSED_BRIGHTNESS = 0.35
+# Frames are drawn for this far ahead on the beat clock: a frame shows about this long after it's drawn
+MATRIX_LEAD = 0.02
 # LYRICS_DEBUG=1 logs every screen change with the song position, for checking timing
 DEBUG = os.environ.get('LYRICS_DEBUG') == '1'
 # LYRICS_EFFECT=<name> uses one effect for every song instead of cycling through them
@@ -300,6 +305,17 @@ log('Panel refresh %.2f ms; animating at %.0f fps' % (refreshPeriod * 1000, 1 / 
 show(layout.message('Connecting to Spotify...', layout.DIM))
 threading.Thread(target=pollSpotify, args=(Spotify(KEYS), state), daemon=True).start()
 
+
+def currentPlayback():
+    with state.lock:
+        return state.playback
+
+
+# The song's real beat (when the PC has analysed it), shared by the matrix effects and the LED strips
+beatClock = beatsync.BeatClock(currentPlayback)
+beatClock.start()
+strips.Strips(beatClock).start()
+
 effect, effectCount, track = None, -1, None
 key, current, previous, isStatic = None, None, None, True
 clock, keyStart, lastFrame, lastSwap = 0.0, 0.0, time.monotonic(), time.monotonic()
@@ -357,8 +373,13 @@ while True:
         pausedShown = False
 
         clock += dt
+        beatState = beatClock.state(now, MATRIX_LEAD)
+        effects.BEAT = beatState.beat if beatState else None
         frame = effect.render(effects.Frame(text, previous, clock, clock - keyStart, screen.progress,
                                             screen.line, dt))
+        if beatState and beatState.sinceDrop is not None and beatState.sinceDrop < 0.6:
+            # A drop: one white hit over the whole panel (the strips do the strobing)
+            frame += (255 - frame) * (0.8 * math.exp(-beatState.sinceDrop / 0.15))
         matrixCanvas.SetImage(Image.fromarray(effects.toBytes(frame), 'RGB'))
         delay = lastSwap + swapDelay - time.monotonic()
         if delay > 0:

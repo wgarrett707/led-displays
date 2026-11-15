@@ -3,16 +3,16 @@ import math
 import random
 import numpy as np
 from effects import (Effect, Text, H, W, YY, XX, XI, BPM, RAINBOW, gradient, ease, shift, paint,
-                     outlineOf)
+                     outlineOf, beatCount)
 
 
 def beatPhase(t):
-    # 0..1 position within the current beat (at BPM)
-    return (t * BPM / 60.0) % 1.0
+    # 0..1 position within the current beat
+    return beatCount(t) % 1.0
 
 
 def beatNumber(t):
-    return int(t * BPM / 60.0)
+    return int(math.floor(beatCount(t)))
 
 
 def bigLetters(text):

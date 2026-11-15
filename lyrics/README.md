@@ -69,6 +69,30 @@ and return one 32x256 RGB frame per call; see `effects.Effect` and `effects.pain
 whole-frame numpy operations cost ~0.3-1.5 ms each, so effects avoid masked gathers/scatters, use
 cached per-line weights, and batch particle drawing (`moreeffects.additive`).
 
+## Beat sync and the LED strips
+
+The lights follow each song's real beat instead of assuming 120 BPM.
+
+- **On the PC** (`pc/analyze.py`, run from `Documents\led-lights` with its own venv): finds the song's
+  audio on YouTube (same length as on Spotify, preferring the "Artist - Topic" album uploads), and
+  works out the beats (Deezer's BPM as a hint), bar lines, sections (repeats share a label; the
+  loudest repeated one is the chorus), drops and their build-ups, a melody note per half beat, and
+  a bass onset envelope. Results go to `beats/<Spotify id>.json` on the Pi.
+  `watch.bat` (or `analyze.py watch`) picks up songs the Pi has played without an analysis
+  (`beats/pending/`); `analyze.py playlist <link>` / `album <link>` / `track <link>` do them ahead of time.
+- **`beatsync.py`**: the beat clock. Song time = Spotify's position + an offset, measured by matching the
+  bass hits WLED's microphone hears (its UDP audio sync, multicast 239.0.0.1:11988, "send" mode) against
+  the song's bass envelope every second; that covers the Bluetooth speaker's delay and Spotify's
+  polling error. `DEFAULT_OFFSET` until it locks; `MIC_LATENCY` for WLED's own delay.
+- **Matrix**: every beat-synced effect uses the real beat (`effects.BEAT`, bar lines on multiples of 4);
+  a drop gives one white hit. Without an analysis they count 120 BPM as before.
+- **`strips.py`**: draws both strips (by distance from the matrix) and streams them to WLED over DDP.
+  Pulses leave the matrix on each beat, coloured by the melody note (repeated melodies repeat colours),
+  with a palette per section label (the chorus is always pink/orange); build-ups rush in from the
+  far ends, faster and whiter; a drop is a white hit then a strobe on the beat for
+  `DROP_STROBE_BARS` bars, never above `MAX_FLASHES` a second. With no analysis, or paused, it stops
+  sending and WLED's own audio-reactive playlist (preset 20) takes over again.
+
 ## Behaviour
 
 - Lines appear `LEAD_MS` (250 ms) before their timestamp; Spotify's reported position trails the
