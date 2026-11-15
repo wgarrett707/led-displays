@@ -29,6 +29,8 @@ FLASH_ON = 0.05
 PALETTES = [(205, 265), (165, 215), (265, 320), (25, 50), (95, 160), (330, 375), (185, 240), (45, 110)]
 HOT = (310, 400)
 GAMMA = 2.2
+# Chart notes held longer than this (s) are looked for no further back
+NOTE_HOLD_MAX = 8.0
 
 
 def rgb(hue, sat, val):
@@ -56,6 +58,8 @@ class Strips(threading.Thread):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.seq = 0
         self.d = np.arange(LONGEST, dtype=np.float32)   # distance from the matrix, in LEDs
+        # Where each drum hit's sparkles land (the same LEDs every time the hit plays)
+        self.spots = np.random.RandomState(1).randint(0, LONGEST, (4096, 40))
         self.raw = np.zeros((sum(n for s, n in STRIPS), 3), np.uint8)
 
     def run(self):
@@ -109,7 +113,9 @@ class Strips(threading.Thread):
         out = np.zeros((LONGEST, 3), np.float32)
         hues = self.palette(st)
         level = 0.35 + 0.65 * st.energy
-        pattern = st.section.get('pattern') or 'pulses'
+        a = self.clock.analysis
+        # Songs with a Clone Hero chart play its notes unless the section's pattern was set in the editor
+        pattern = st.section.get('pattern') or ('notes' if a is not None and a.hasNotes else 'pulses')
         if st.build is not None and pattern != 'off':
             self.buildUp(out, st, hues, level)
         else:
@@ -165,6 +171,56 @@ class Strips(threading.Thread):
                 note2 = self.note(2 * k + 1)
                 self.pulse(out, (age - 0.5) * speed, rgb(self.noteHue(hues, note2 if note2 >= 0 else note), 0.9, 0.45 * strength),
                            width=2.5, tail=12)
+
+    def draw_notes(self, out, st, hues, level):
+        # The notes from the song's Clone Hero chart. Each melody note (guitar, else keys or bass) leaves
+        # the matrix as a pulse coloured by its lane, and a held note leaves a streak behind it for as
+        # long as it's held. Kicks swell the whole strip, snares throw pale sparkles everywhere, hi-hats
+        # and cymbals sparkle. Where the chart has nothing (an intro, a breakdown), beat pulses instead.
+        a = self.clock.analysis
+        if a is None or not a.hasNotes:
+            return self.draw_pulses(out, st, hues, level)
+        t = st.time
+        speed = LONGEST / (CROSS_BEATS * st.period)   # LEDs a second
+        window = 1.3 * CROSS_BEATS * st.period          # how long a pulse takes to leave the strip
+        lead = a.lead
+        i0 = int(np.searchsorted(lead[:, 0], t - window - NOTE_HOLD_MAX))
+        i1 = int(np.searchsorted(lead[:, 0], t, 'right'))
+        notes = lead[i0:i1]
+        j0 = int(np.searchsorted(a.drumTimes, t - 0.6))
+        j1 = int(np.searchsorted(a.drumTimes, t, 'right'))
+        quiet = 2 * st.period
+        busy = (len(notes) and (t - notes[-1, 0] < quiet or np.any(notes[:, 0] + notes[:, 2] > t))) or                (j1 > 0 and t - a.drumTimes[j1 - 1] < quiet)
+        if not busy:
+            return self.draw_pulses(out, st, hues, level)
+        out += rgb(hues[0], 0.9, 0.04 + 0.08 * st.energy)
+        # All the notes at once: one row per note still on the strip
+        ages = t - notes[:, 0]
+        held = notes[:, 2]
+        heads = ages * speed
+        tails = np.maximum(0.0, ages - held) * speed
+        live = (ages < window) | ((held > 0) & (tails < LONGEST))
+        if live.any():
+            lanes, ages, held, heads, tails = notes[live, 1], ages[live], held[live], heads[live], tails[live]
+            hue = hues[0] + (hues[1] - hues[0]) * np.maximum(lanes, 0) / 4.0
+            # An open note (lane -1) is all lanes at once: nearly white
+            colors = np.where((lanes >= 0)[:, None], hsvArray(hue, 0.85, level), hsvArray(hue, 0.3, level))
+            x = self.d[None, :] - heads[:, None]
+            shape = np.where(x > 0, np.exp(-(x / 3.0) ** 2), np.exp(np.minimum(x, 0) / 10.0)) * (ages < window)[:, None]
+            # A held note's streak runs from where it started to where it is now
+            shape += 0.4 * ((self.d[None, :] >= tails[:, None]) & (x <= 0) & ((held > 0) & (heads - tails > 1))[:, None])
+            out += (shape.T @ colors).astype(np.float32)
+        for k in range(j0, j1):
+            age = t - a.drumTimes[k]
+            lane = a.drumLanes[k]
+            if lane == 0:
+                if a.drumAccent[k]:
+                    out += rgb(hues[0], 0.85, 0.3 * level * math.exp(-age / 0.18))
+                continue
+            if lane == 1 and not a.drumAccent[k]:
+                continue
+            count, sat, strength, fade = {1: (40, 0.2, 0.9, 0.12), 2: (6, 0.3, 0.35, 0.12)}.get(lane, (14, 0.3, 0.8, 0.3))
+            out[self.spots[k % len(self.spots), :count]] += rgb(hues[1], sat, 1.0) * (level * strength * math.exp(-age / fade))
 
     def draw_breathe(self, out, st, hues, level):
         # The whole strip swells on each beat, shading from one colour at the matrix to the other at the ends

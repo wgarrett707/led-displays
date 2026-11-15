@@ -4,6 +4,7 @@
 #   python analyze.py watch                 analyse songs the Pi has asked for, as they come in
 #   python analyze.py track <Spotify link>  analyse particular songs now
 #   python analyze.py playlist <link>       analyse a whole playlist ahead of a party
+#   python analyze.py charts                look for note charts for songs analysed before charts.py
 #
 # Audio comes from YouTube (yt-dlp), matched to the Spotify track by title, artist and length.
 import argparse
@@ -19,6 +20,8 @@ import librosa
 import numpy as np
 import requests
 import yt_dlp
+
+import charts
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 AUDIO_DIR = os.path.join(HERE, 'audio')
@@ -433,6 +436,7 @@ def analyzeTrack(track, force=False):
         bpm = deezerBpm(track)
         result.update(source=source, bpmHint=bpm, offset=0.0)
         result.update(analyze(y, bpm))
+        findChart(result, y)
         log('%s: %.1f BPM%s, %s, %d sections (%s), drops at %s, lifts at %s (%.0f s)' % (
             name, result['tempo'], ' (Deezer %.1f)' % bpm if bpm else '',
             ('steady tempo' + (' (beat vs off-beat unclear: check it in the editor)' if result['offbeatRisk'] else ''))
@@ -445,6 +449,40 @@ def analyzeTrack(track, force=False):
         json.dump(result, f, separators=(',', ':'))
     os.replace(out + '.tmp', out)
     return result
+
+
+def findChart(result, y):
+    # The guitar / drums / keys notes from a Clone Hero chart of the song, if there's one that lines up
+    try:
+        charts.addChart(result, y)
+    except Exception as e:
+        log('  chart lookup failed: %r' % e)
+
+
+def addCharts(force=False):
+    # Charts for songs analysed before (edited ones too: a chart doesn't change any edits)
+    for name in sorted(os.listdir(OUT_DIR)):
+        if not name.endswith('.json'):
+            continue
+        path = os.path.join(OUT_DIR, name)
+        with open(path) as f:
+            result = json.load(f)
+        if result.get('error') or (result.get('chartChecked') == charts.VERSION and not force):
+            continue
+        audio = [f for f in os.listdir(AUDIO_DIR) if f.startswith(result['id'] + '.')]
+        if not audio:
+            continue
+        log('%s - %s' % (result['artist'], result['title']))
+        findChart(result, decode(os.path.join(AUDIO_DIR, audio[0])))
+        if result.get('chartChecked') != charts.VERSION:
+            continue
+        with open(path + '.tmp', 'w') as f:
+            json.dump(result, f, separators=(',', ':'))
+        os.replace(path + '.tmp', path)
+        try:
+            sendToPi(result)
+        except Exception as e:
+            log('  could not send to the Pi: %r' % e)
 
 
 def _mmss(t):
@@ -551,12 +589,15 @@ def watch():
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('mode', choices=['watch', 'track', 'playlist', 'album'])
+    p.add_argument('mode', choices=['watch', 'track', 'playlist', 'album', 'charts'])
     p.add_argument('links', nargs='*')
     p.add_argument('--no-push', action='store_true', help="analyse only; don't send to the Pi")
+    p.add_argument('--force', action='store_true', help='charts: look again for songs already checked')
     a = p.parse_args()
     if a.mode == 'watch':
         return watch()
+    if a.mode == 'charts':
+        return addCharts(a.force)
     tracks = linkTracks(' '.join(a.links))
     log('%d track(s)' % len(tracks))
     run(tracks, push=not a.no_push)

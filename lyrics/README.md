@@ -82,13 +82,23 @@ The lights follow each song's real beat instead of assuming 120 BPM.
   a bass onset envelope. Results go to `beats/<Spotify id>.json` on the Pi.
   `watch.bat` (or `analyze.py watch`) picks up songs the Pi has played without an analysis
   (`beats/pending/`); `analyze.py playlist <link>` (yours or public; read through the Pi's Spotify login, since Spotify only lists a playlist's songs to a signed-in user) / `album <link>` / `track <link>` do them ahead of time.
+- **Chart notes** (`pc/charts.py`): when someone has made a Clone Hero / Rock Band chart of the song, the
+  analysis also stores its expert guitar, bass, keys and drum notes. Charts are found through Chorus
+  Encore (the search behind the Bridge downloader), official ones (Harmonix etc.) and full-band charts
+  first. A chart is timed against its own audio, which can start a few seconds earlier or later than
+  ours, so that audio is downloaded just long enough to line the two up (overall offset, then 15 s
+  stretches matched one by one and a straight line fitted through the ones that agree; at least 60% must
+  agree, which rejects charts of a different edit or recording) and then thrown away; only the notes are
+  kept, in our audio's time. `analyze.py charts` looks for charts for songs analysed before this
+  existed (`--force` looks again). Charted beats sit ~40 ms before our beat grids, as `strips.LEAD`
+  assumes.
 - **Editor** (`pc/editor.py`, `editor.bat`): a page on the PC for fixing a song by ear. Plays the song with
   a click track on the beat grid (high click on bar 1); tap along with T for ~20 s, then "New grid from my
   taps" fits a steady tempo to the taps and lines it up exactly with the audio for the whole song (taps
   alone drift 50-300 ms by the end); H moves the grid half a beat (clicks between the beats), G refits a
   steady grid from the audio; nudge it 10 ms at a time; tempo x2 / /2; set bar 1 (B), drops (D), build-up starts (U), lifts (L) and
-  sections (S); per section: label, chorus, strip pattern (pulses, breathe, chase, sparkle, rainbow,
-  solid, strobe, off) and colours. Save sends it to the Pi, which reloads it within seconds;
+  sections (S); per section: label, chorus, strip pattern (chart notes, pulses, breathe, chase, sparkle,
+  rainbow, solid, strobe, off) and colours. The strip preview follows the chart's notes when there is one. Save sends it to the Pi, which reloads it within seconds;
   hand-edited songs are never overwritten by the automatic analysis.
 - **`beatsync.py`**: the beat clock. Song time = Spotify's position + an offset, measured by matching the
   bass hits WLED's microphone hears (its UDP audio sync, multicast 239.0.0.1:11988, "send" mode) against
@@ -102,7 +112,11 @@ The lights follow each song's real beat instead of assuming 120 BPM.
 - **`strips.py`**: draws both strips (by distance from the matrix) and streams them to WLED over DDP.
   Pulses leave the matrix on each beat, coloured by the melody note (repeated melodies repeat colours),
   with a palette per section label (the chorus is always pink/orange); build-ups rush in from the
-  far ends, faster and whiter; a drop is a white hit then a strobe on the beat for
+  far ends, faster and whiter. Songs with a chart play its notes instead (pattern `notes`, the default
+  for them): each guitar note (else keys / bass) leaves the matrix as a pulse coloured by its lane, held
+  notes trail a streak while held, kicks swell the strip near the matrix, snares lift the whole strip
+  (each at most ~3 a second, `beatsync.ACCENT_GAP`), hi-hats and cymbals sparkle; stretches the chart
+  leaves empty fall back to beat pulses. A drop is a white hit then a strobe on the beat for
   `DROP_STROBE_BARS` bars, never above `MAX_FLASHES` a second. With no analysis, or paused, it stops
   sending and WLED's own audio-reactive playlist (preset 20) takes over again.
 

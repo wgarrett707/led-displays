@@ -34,6 +34,8 @@ WINDOW = 20.0
 TRACK_SEARCH = 0.12
 # A seek (or a new play of the song) rather than a timing correction
 SEEK = 1.5
+# Kick and snare accents from a chart: at most one per this many seconds each (about 3 a second)
+ACCENT_GAP = 0.3
 # Spotify positions: each poll's (position - local time); the median of the last ANCHORS is the
 # song's start on the local clock, much steadier than any single poll
 ANCHORS = 15
@@ -61,6 +63,24 @@ class Analysis:
         self.lifts = data['lifts']
         self.env = np.frombuffer(base64.b64decode(data['env']), np.uint8).astype(np.float32) / 255
         self.envRate = data['envRate']
+        # Notes from a Clone Hero chart of the song (analyze.py / charts.py), already in song time:
+        # the melody part as rows of (time, lane 0-4 or -1 for an open note, seconds held), and drum
+        # hits as times and lanes (0 kick, 1 snare, 2-4 hi-hat / toms / cymbals)
+        chart = data.get('chart') or {}
+        self.chartName = '%s (charted by %s)' % (chart.get('name'), chart.get('charter')) if chart else None
+        self.leadPart = next((k for k in ('guitar', 'guitarghl', 'keys', 'bass', 'bassghl') if chart.get(k)), None)
+        self.lead = np.array(chart[self.leadPart], float).reshape(-1, 3) if self.leadPart else np.zeros((0, 3))
+        drums = np.array(chart.get('drums') or [], float).reshape(-1, 2)
+        self.drumTimes, self.drumLanes = drums[:, 0].copy(), drums[:, 1].astype(int)
+        self.hasNotes = len(self.lead) > 0 or len(self.drumTimes) > 0
+        # Kicks and snares the strips light up: no closer together than ACCENT_GAP, so a busy drum
+        # part never turns into a strobe
+        self.drumAccent = np.zeros(len(self.drumTimes), bool)
+        last = {}
+        for k, (t, lane) in enumerate(zip(self.drumTimes, self.drumLanes)):
+            if lane <= 1 and t - last.get(lane, -9.0) >= ACCENT_GAP:
+                self.drumAccent[k] = True
+                last[lane] = t
 
     def beatAt(self, t):
         # Fractional beat index at song time t (extrapolated before the first and after the last)
@@ -247,8 +267,9 @@ class BeatClock(threading.Thread):
             with self.lock:
                 if self.trackId == p.id:
                     self.analysis = a
-            log('Beats for %s: %.1f BPM, %d drops%s' % (p.title, a.tempo, len(a.drops),
-                                                       ' (edited)' if data.get('edited') else ''))
+            log('Beats for %s: %.1f BPM, %d drops%s%s' % (p.title, a.tempo, len(a.drops),
+                                                         ' (edited)' if data.get('edited') else '',
+                                                         ', notes from %s' % a.chartName if a.hasNotes else ''))
         else:
             pending = os.path.join(PENDING_DIR, p.id + '.json')
             if not os.path.exists(pending):
