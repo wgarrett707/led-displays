@@ -75,14 +75,18 @@ The lights follow each song's real beat instead of assuming 120 BPM.
 
 - **On the PC** (`pc/analyze.py`, run from `Documents\led-lights` with its own venv): finds the song's
   audio on YouTube (same length as on Spotify, preferring the "Artist - Topic" album uploads), and
-  works out the beats (Deezer's BPM as a hint), bar lines, sections (repeats share a label; the
+  works out the beats (Deezer's BPM as a hint; most songs are recorded to a click, so when at least 80% of
+  the song sits on one steady tempo the whole grid is that exact tempo, which stops the tracker slipping onto
+  the off-beat in breakdowns; close calls between beat and off-beat are flagged in the editor), bar lines, sections (repeats share a label; the
   loudest repeated one is the chorus), drops and their build-ups, a melody note per half beat, and
   a bass onset envelope. Results go to `beats/<Spotify id>.json` on the Pi.
   `watch.bat` (or `analyze.py watch`) picks up songs the Pi has played without an analysis
   (`beats/pending/`); `analyze.py playlist <link>` / `album <link>` / `track <link>` do them ahead of time.
 - **Editor** (`pc/editor.py`, `editor.bat`): a page on the PC for fixing a song by ear. Plays the song with
-  a click track on the beat grid (high click on bar 1); tap along with T to check or rebuild the grid;
-  nudge it 10 ms at a time; tempo x2 / /2; set bar 1 (B), drops (D), build-up starts (U), lifts (L) and
+  a click track on the beat grid (high click on bar 1); tap along with T for ~20 s, then "New grid from my
+  taps" fits a steady tempo to the taps and lines it up exactly with the audio for the whole song (taps
+  alone drift 50-300 ms by the end); H moves the grid half a beat (clicks between the beats), G refits a
+  steady grid from the audio; nudge it 10 ms at a time; tempo x2 / /2; set bar 1 (B), drops (D), build-up starts (U), lifts (L) and
   sections (S); per section: label, chorus, strip pattern (pulses, breathe, chase, sparkle, rainbow,
   solid, strobe, off) and colours. Save sends it to the Pi, which reloads it within seconds;
   hand-edited songs are never overwritten by the automatic analysis.

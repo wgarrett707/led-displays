@@ -25,7 +25,7 @@ AUDIO_DIR = os.path.join(HERE, 'audio')
 OUT_DIR = os.path.join(HERE, 'analysis')
 PI = os.environ.get('LED_PI', 'pi@willpi')
 PI_BEATS = '/home/pi/led-scripts/lyrics/beats'
-VERSION = 2
+VERSION = 3
 
 SR = 22050
 HOP = 256                 # ~11.6 ms analysis frames
@@ -157,7 +157,75 @@ def beatGrid(y, bpmHint):
             tempo, beats = fast, fastBeats
     if len(beats) < 8:
         raise ValueError('no steady beat found')
-    return extendGrid(beats, len(y) / SR)
+    # Most songs are recorded to a click: one exact tempo all the way through. The tracker above finds
+    # the beat well but now and then slips onto the off-beat for a stretch (in a breakdown, say), so
+    # when the song is steady its beats come from one steady grid instead.
+    period = float(np.polyfit(np.arange(len(beats)), beats, 1)[0])
+    fit = steadyGrid(y, period, onset=onset)
+    if fit['steady'] >= STEADY:
+        return fit['beats'], 60.0 / fit['period'], 0, fit
+    grid, tempo, first = extendGrid(beats, len(y) / SR)
+    return grid, tempo, first, fit
+
+
+# Share of the song that must sit on one steady grid for it to be used
+STEADY = 0.8
+# Below this (onsets on the beat / on the off-beat), the grid may be on the off-beat: worth a listen
+SURE = 1.25
+
+
+def steadyGrid(y, period, spread=0.02, near=None, onset=None):
+    # One exact tempo and beat position for the whole song.
+    #  Tempo: of every period within 'spread' of 'period', the one whose beat lines (and half-beat
+    #  lines, so stretches with the sound on the off-beat still count) catch the most onset energy.
+    #  Position: all the onsets folded onto a single beat; the beat is where they pile up most (hits
+    #  across the whole spectrum, kick and snare, rather than a bassline or hi-hats on the off-beat).
+    #  'near' (seconds) keeps it within a quarter beat of a position the user tapped.
+    # Returns beats, period, 'steady' (the share of 16-beat stretches that sit on the grid) and 'sure'
+    # (how much more piles up on the beat than on the off-beat; near 1 means it could be either).
+    if onset is None:
+        onset = librosa.onset.onset_strength(y=y, sr=SR, hop_length=HOP, aggregate=np.median)
+    n = len(onset)
+    t = np.arange(n) * HOP / SR
+    duration = len(y) / SR
+    o = onset - onset.mean()
+
+    def score(p):
+        return abs(np.sum(o * np.exp(2j * np.pi * t / p))) + abs(np.sum(o * np.exp(4j * np.pi * t / p)))
+
+    step = period * period / max(t[-1], 1.0) / 30
+    cands = np.arange(period * (1 - spread), period * (1 + spread) + step, step)
+    p = cands[int(np.argmax([score(c) for c in cands]))]
+    for fine in (step / 5, step / 25):
+        cands = p + fine * np.arange(-6, 7)
+        p = cands[int(np.argmax([score(c) for c in cands]))]
+
+    # Where in the beat the hits land (5 ms bins, lightly smoothed)
+    weight = np.maximum(onset - np.median(onset), 0)
+    bins = max(8, int(round(p / 0.005)))
+    hist = np.bincount((((t / p) % 1.0) * bins).astype(int) % bins, weights=weight, minlength=bins)
+    hist = np.convolve(np.concatenate([hist[-2:], hist, hist[:2]]), [1, 2, 3, 2, 1], 'valid')
+    plain = hist.copy()
+    if near is not None:
+        dist = np.abs(((np.arange(bins) + 0.5) / bins - (near / p) % 1.0 + 0.5) % 1.0 - 0.5)
+        hist = np.where(dist <= 0.25, hist, -1)
+    k = int(np.argmax(hist))
+    left, mid, right = hist[k - 1], hist[k], hist[(k + 1) % bins]
+    shift = 0.5 * (left - right) / (left - 2 * mid + right) if (left - 2 * mid + right) < 0 else 0.0
+    a = ((k + 0.5 + shift) / bins * p) % p
+    opposite = plain[(k + bins // 2 - 2):(k + bins // 2 + 3)].max() if k + bins // 2 + 3 <= bins else         np.concatenate([plain, plain])[(k + bins // 2 - 2):(k + bins // 2 + 3)].max()
+    sure = float(plain[k] / max(opposite, 1e-9))
+
+    # How much of the song sits on this grid (beat or off-beat), 16 beats at a time
+    win = max(8, int(16 * p * SR / HOP))
+    whole = np.sum(o * np.exp(4j * np.pi * (t - a) / p))
+    on = []
+    for start in range(0, n - win + 1, win // 2):
+        part = np.sum(o[start:start + win] * np.exp(4j * np.pi * (t[start:start + win] - a) / p))
+        if abs(part) > 0.2 * abs(whole) * win / n:
+            on.append(abs(np.angle(part / whole)) / (4 * np.pi) * p < 0.035)
+    beats = a + p * np.arange(int(np.ceil(-a / p)), int(np.floor((duration - a) / p)) + 1)
+    return {'beats': beats, 'period': float(p), 'steady': float(np.mean(on)) if on else 0.0, 'sure': sure}
 
 
 def extendGrid(beats, duration):
@@ -193,7 +261,7 @@ def beatFeatures(y, beats, harmonic=None):
 
 def analyze(y, bpmHint=None):
     duration = len(y) / SR
-    beats, tempo, firstReal = beatGrid(y, bpmHint)
+    beats, tempo, firstReal, fit = beatGrid(y, bpmHint)
     beatFrames = librosa.time_to_frames(beats, sr=SR, hop_length=HOP)
     harmonic, percussive = librosa.effects.hpss(y)
 
@@ -241,6 +309,8 @@ def analyze(y, bpmHint=None):
         'tempo': round(tempo, 2),
         'beats': [round(float(t), 3) for t in beats],
         'firstBeat': int(firstReal),
+        'steady': round(fit['steady'], 2),
+        'offbeatRisk': fit['steady'] >= STEADY and fit['sure'] < SURE,
         'downbeat': phase,
         'sections': sections,
         'drops': drops,
@@ -363,8 +433,11 @@ def analyzeTrack(track, force=False):
         bpm = deezerBpm(track)
         result.update(source=source, bpmHint=bpm, offset=0.0)
         result.update(analyze(y, bpm))
-        log('%s: %.1f BPM%s, %d sections (%s), drops at %s, lifts at %s (%.0f s)' % (
-            name, result['tempo'], ' (Deezer %.1f)' % bpm if bpm else '', len(result['sections']),
+        log('%s: %.1f BPM%s, %s, %d sections (%s), drops at %s, lifts at %s (%.0f s)' % (
+            name, result['tempo'], ' (Deezer %.1f)' % bpm if bpm else '',
+            ('steady tempo' + (' (beat vs off-beat unclear: check it in the editor)' if result['offbeatRisk'] else ''))
+            if result['steady'] >= STEADY else 'tempo varies (%.0f%% steady), following the beat' % (100 * result['steady']),
+            len(result['sections']),
             ''.join(s['label'] for s in result['sections']),
             [_mmss(d['time']) for d in result['drops']] or 'none', [_mmss(d['time']) for d in result['lifts']] or 'none',
             time.time() - started))

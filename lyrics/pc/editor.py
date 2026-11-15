@@ -23,6 +23,7 @@ PAGE = os.path.join(analyze.HERE, 'editor.html')
 PEAKS_DIR = os.path.join(analyze.HERE, 'peaks')
 PEAKS_RATE = 100          # waveform points per second
 LOG = []                  # recent messages, shown in the page
+ONSETS = {}               # song id -> (audio, onset strength), for steady-grid fits
 
 
 def note(message):
@@ -120,6 +121,21 @@ def save(trackId, edit):
     return {'ok': True, 'sent': sent, 'song': r}
 
 
+def steady(trackId, req):
+    # A steady grid fitted to the song's audio near a tempo (and beat position) from the page
+    if trackId not in ONSETS:
+        y = analyze.decode(audioPath(trackId))
+        ONSETS.clear()
+        ONSETS[trackId] = (y, analyze.librosa.onset.onset_strength(y=y, sr=analyze.SR, hop_length=analyze.HOP,
+                                                                   aggregate=np.median))
+    y, onset = ONSETS[trackId]
+    period = 60.0 / float(req['bpm'])
+    spread = min(0.03, max(0.003, float(req.get('spread', 0.02))))
+    fit = analyze.steadyGrid(y, period, spread=spread, near=req.get('near'), onset=onset)
+    return {'beats': [round(float(b), 4) for b in fit['beats']], 'bpm': 60.0 / fit['period'],
+            'steady': fit['steady'], 'sure': fit['sure']}
+
+
 def analyzeLinks(text):
     # Spotify track / album / playlist links, analysed in the background
     def work():
@@ -205,6 +221,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))) or b'{}')
             if url.path == '/api/save':
                 return self.reply(save(q['id'], body))
+            if url.path == '/api/steady':
+                return self.reply(steady(q['id'], body))
             if url.path == '/api/analyze':
                 analyzeLinks(body.get('links', ''))
                 return self.reply({'ok': True})

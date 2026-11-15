@@ -62,12 +62,14 @@
       <div class="row">
         <button id="earlier" title="[">&larr; 10 ms earlier</button>
         <button id="later" title="]">10 ms later &rarr;</button>
+        <button id="half" title="H">Half a beat (clicks between the beats)</button>
         <span id="shift" class="dim"></span>
       </div>
       <div class="row" style="margin-top:8px">
         <button id="double">Tempo &times;2</button>
         <button id="halve">Tempo &divide;2</button>
         <button id="bar1" title="B">This beat is bar 1</button>
+        <button id="steady" title="G">Steady grid from the audio</button>
         <span id="tempo" class="dim"></span>
       </div>
     </div>
@@ -75,8 +77,8 @@
       <h3>Tap along <span class="dim" style="text-transform:none">(press <kbd>T</kbd> on every beat while it plays)</span></h3>
       <div id="tapInfo" class="dim">No taps yet.</div>
       <div class="row" style="margin-top:8px">
-        <button id="tapShift" disabled>Move grid onto my taps</button>
-        <button id="tapGrid" disabled>New grid from my tempo</button>
+        <button id="tapGrid" disabled title="Your tempo and beat, lined up exactly with the song, for the whole song">New grid from my taps</button>
+        <button id="tapShift" disabled title="Keeps the grid's tempo, just slides it">Just slide the grid onto my taps</button>
         <button id="tapClear" disabled>Clear taps</button>
       </div>
     </div>
@@ -115,7 +117,7 @@
     <div><kbd>&larr;</kbd> <kbd>&rarr;</kbd> back / forward 2 s (<kbd>Shift</kbd>: 10 s)</div>
     <div><kbd>T</kbd> tap on the beat</div>
     <div><kbd>[</kbd> <kbd>]</kbd> grid 10 ms earlier / later (<kbd>Shift</kbd>: 1 ms)</div>
-    <div><kbd>B</kbd> the nearest beat is bar 1</div>
+    <div><kbd>B</kbd> the nearest beat is bar 1 &middot; <kbd>H</kbd> half a beat &middot; <kbd>G</kbd> steady grid from the audio</div>
     <div><kbd>D</kbd> drop, <kbd>U</kbd> build-up start, <kbd>L</kbd> lift, <kbd>S</kbd> new section</div>
     <div><kbd>X</kbd> delete the nearest mark</div>
     <div><kbd>Ctrl</kbd>+<kbd>Z</kbd> undo &middot; click the waveform to jump</div>
@@ -270,22 +272,49 @@ function halveTempo() {
   });
 }
 
-// Taps: tempo and timing against the grid
+// Taps. A steady beat is fitted to them: every tempo near the typical gap between taps is tried, the taps
+// are folded onto one beat at that tempo, and the tempo where they bunch up tightest wins. That needs no
+// counting of beats, so a missed beat, a double tap or a pause doesn't throw it off. A straight line through
+// the taps then sharpens it, leaving out taps that were well off.
+function lineFit(k, t) {
+  const n = k.length, mk = k.reduce((s, x) => s + x, 0) / n, mt = t.reduce((s, x) => s + x, 0) / n;
+  let sxy = 0, sxx = 0; for (let i = 0; i < n; i++) { sxy += (k[i] - mk) * (t[i] - mt); sxx += (k[i] - mk) ** 2; }
+  const p = sxy / sxx, a = mt - p * mk;
+  let ss = 0; for (let i = 0; i < n; i++) ss += (t[i] - a - p * k[i]) ** 2;
+  const sd = Math.sqrt(ss / Math.max(1, n - 2));
+  return {p, a, sd, pErr: sd / Math.sqrt(sxx), n, kMid: mk};
+}
+function fitTaps(list) {
+  const t = list.slice().sort((x, y) => x - y);
+  const gaps = []; for (let i = 1; i < t.length; i++) if (t[i] - t[i - 1] > 0.25 && t[i] - t[i - 1] < 1.5) gaps.push(t[i] - t[i - 1]);
+  if (gaps.length < 3) return null;
+  gaps.sort((x, y) => x - y);
+  const p0 = gaps[gaps.length >> 1], span = t[t.length - 1] - t[0];
+  const step = Math.min(p0 * 0.002, p0 * p0 / (span + p0) / 12);
+  let best = {score: -1};
+  for (let p = p0 * 0.85; p <= p0 * 1.15; p += step) {
+    let c = 0, s = 0;
+    for (const x of t) { const ang = 2 * Math.PI * x / p; c += Math.cos(ang); s += Math.sin(ang); }
+    if (c * c + s * s > best.score) best = {score: c * c + s * s, p, a: Math.atan2(s, c) / (2 * Math.PI) * p};
+  }
+  let {p, a} = best, f = null;
+  for (let round = 0; round < 3; round++) {
+    const tol = f ? Math.max(0.05, 3 * f.sd) : 0.25 * p, k = [], used = [];
+    for (const x of t) { const kk = Math.round((x - a) / p); if (Math.abs(x - a - kk * p) < tol && kk !== k[k.length - 1]) { k.push(kk); used.push(x); } }
+    if (k.length < 4) return null;
+    f = lineFit(k, used); p = f.p; a = f.a;
+  }
+  return f;
+}
 function tapStats() {
   if (taps.length < 4) return null;
-  const t = taps.slice().sort((a, b) => a - b);
-  const d = []; for (let i = 1; i < t.length; i++) if (t[i] - t[i - 1] > 0.2 && t[i] - t[i - 1] < 2) d.push(t[i] - t[i - 1]);
-  if (d.length < 3) return null;
-  d.sort((a, b) => a - b);
-  const p0 = d[d.length >> 1];
-  const k = t.map(x => Math.round((x - t[0]) / p0));
-  const n = t.length, mk = k.reduce((a, b) => a + b) / n, mt = t.reduce((a, b) => a + b) / n;
-  let sxy = 0, sxx = 0; for (let i = 0; i < n; i++) { sxy += (k[i] - mk) * (t[i] - mt); sxx += (k[i] - mk) ** 2; }
-  const p = sxx ? sxy / sxx : p0, a = mt - p * mk;
+  const f = fitTaps(taps);
+  if (!f) return null;
   const off = taps.map(x => x - edit.beats[nearestBeat(x)]);
   const mean = off.reduce((a, b) => a + b) / off.length;
-  const sd = Math.sqrt(off.reduce((s, x) => s + (x - mean) ** 2, 0) / off.length);
-  return {bpm: 60 / p, period: p, a, mean, sd, n};
+  // How far the tapped tempo alone could be off by the far end of the song
+  const mid = f.a + Math.round(f.kMid) * f.p, drift = Math.max(mid, duration() - mid) / f.p * f.pErr;
+  return {bpm: 60 / f.p, period: f.p, a: f.a, mid, sd: f.sd, pErr: f.pErr, n: f.n, mean, drift};
 }
 function showTaps() {
   const s = tapStats();
@@ -294,21 +323,47 @@ function showTaps() {
   if (!s) { $('tapInfo').textContent = taps.length ? taps.length + ' taps (keep going...)' : 'No taps yet.'; return; }
   const gridBpm = 60 / period();
   const when = Math.abs(s.mean) < 0.012 ? 'right on the grid' : Math.abs(s.mean * 1000).toFixed(0) + ' ms ' + (s.mean > 0 ? 'after' : 'before') + ' the grid';
-  $('tapInfo').innerHTML = `${s.n} taps: <b>${s.bpm.toFixed(1)} BPM</b> (grid ${gridBpm.toFixed(1)}). On average ${when}, give or take ${(s.sd * 1000).toFixed(0)} ms.` +
+  $('tapInfo').innerHTML = `${s.n} taps: <b>${s.bpm.toFixed(2)} BPM</b> (grid ${gridBpm.toFixed(2)}), give or take ${(s.sd * 1000).toFixed(0)} ms a tap. ` +
+    `Near your taps the grid is ${when}.` +
     (Math.abs(s.bpm / gridBpm - 2) < 0.15 ? ' You are tapping twice as fast as the grid: try Tempo &times;2.' : '') +
     (Math.abs(s.bpm / gridBpm - 0.5) < 0.08 ? ' You are tapping half as fast as the grid: try Tempo &divide;2.' : '');
 }
 function tapShift() { const s = tapStats(); shiftGrid(s.mean); status('Grid moved ' + (s.mean * 1000).toFixed(0) + ' ms onto your taps'); taps = []; showTaps(); }
-function tapGrid() {
-  const s = tapStats();
-  act('New grid at ' + s.bpm.toFixed(1) + ' BPM from your taps', () => {
-    const barTime = edit.beats[nearestBar(taps[0])];
-    const out = []; for (let k = Math.ceil(-s.a / s.period); s.a + k * s.period <= duration(); k++) out.push(s.a + k * s.period);
-    edit.beats = out;
-    let i = 0; for (let j = 0; j < out.length; j++) if (Math.abs(out[j] - barTime) < Math.abs(out[i] - barTime)) i = j;
-    edit.downbeat = i % 4;
-  });
+function setBarNear(t) { let i = 0; for (let j = 0; j < edit.beats.length; j++) if (Math.abs(edit.beats[j] - t) < Math.abs(edit.beats[i] - t)) i = j; edit.downbeat = i % 4; }
+// A new steady grid for the whole song: the tempo and beat from your taps, then lined up exactly with the
+// audio (within a quarter beat of where you tapped, so you decide which is the beat). Bar 1 stays put.
+async function tapGrid() {
+  const s = tapStats(), barTime = edit.beats[nearestBar(taps[0])];
+  status('Lining your taps up with the song...');
+  let beats = null, how = '';
+  try {
+    const spread = Math.min(0.03, Math.max(0.004, 3 * s.pErr / s.period + 0.002));
+    const r = await (await fetch('/api/steady?id=' + song.id, {method: 'POST', body: JSON.stringify({bpm: s.bpm, spread, near: s.mid})})).json();
+    if (r.beats && r.steady >= 0.5) { beats = r.beats; how = `${r.bpm.toFixed(2)} BPM from your taps, lined up with the song`; }
+  } catch (e) {}
+  if (!beats) {
+    beats = []; for (let k = Math.ceil(-s.a / s.period); s.a + k * s.period <= duration(); k++) beats.push(s.a + k * s.period);
+    how = `${s.bpm.toFixed(2)} BPM straight from your taps (the song has no clear steady beat to line up with)`;
+  }
+  act('New grid: ' + how, () => { edit.beats = beats; edit.shift = 0; setBarNear(barTime); });
   taps = []; showTaps();
+}
+// The whole song as one steady grid from the audio, keeping to the beat (not the off-beat) at the playhead
+async function steadyFromAudio() {
+  const near = edit.beats[nearestBeat(position())], barTime = edit.beats[nearestBar(position())];
+  status('Fitting a steady beat to the whole song...');
+  const r = await (await fetch('/api/steady?id=' + song.id, {method: 'POST', body: JSON.stringify({bpm: 60 / period(), spread: 0.02, near})})).json();
+  if (!r.beats) return status(r.error || 'Could not fit a steady beat', true);
+  if (r.steady < 0.5) return status(`This song doesn't keep a steady tempo (only ${(r.steady * 100).toFixed(0)}% of it fits one), so the grid was left alone`, true);
+  act(`Steady grid at ${r.bpm.toFixed(2)} BPM (${(r.steady * 100).toFixed(0)}% of the song sits right on it)`, () => { edit.beats = r.beats; edit.shift = 0; setBarNear(barTime); });
+}
+function halfBeat() {
+  const half = period() / 2;
+  act('Grid moved half a beat (beats and off-beats swapped)', () => {
+    edit.beats = edit.beats.map(b => b + half).filter(b => b <= duration());
+    if (edit.beats[0] > half * 2) { edit.beats.unshift(edit.beats[0] - half * 2); edit.downbeat = (edit.downbeat + 1) % 4; }
+    edit.shift += half;
+  });
 }
 
 // ---------------------------------------------------------------- section panel
@@ -442,7 +497,8 @@ async function openSong(id) {
   if (song.error && !song.beats) { status(song.error, true); return; }
   edit = {beats: song.beats.slice(), downbeat: song.downbeat, sections: JSON.parse(JSON.stringify(song.sections)),
           drops: JSON.parse(JSON.stringify(song.drops)), lifts: JSON.parse(JSON.stringify(song.lifts)), shift: 0};
-  $('info').textContent = `${song.artist} – ${song.title}` + (song.edited ? ` (edited ${song.editedAt})` : ' (automatic)');
+  $('info').textContent = `${song.artist} – ${song.title}` + (song.edited ? ` (edited ${song.editedAt})` : ' (automatic)') +
+    (song.offbeatRisk && !song.edited ? ' · check: the grid may be on the off-beat (if the clicks fall between the beats, press H)' : '');
   pausedPos = 0; updateButtons(); showTaps();
   status('Loading audio...');
   buffer = await ctx.decodeAudioData(await (await fetch('/audio?id=' + id)).arrayBuffer());
@@ -477,7 +533,7 @@ $('zoomOut').onclick = () => { zoom = Math.min(60, zoom * 1.5); };
 $('earlier').onclick = () => shiftGrid(-0.01);
 $('later').onclick = () => shiftGrid(0.01);
 $('double').onclick = doubleTempo; $('halve').onclick = halveTempo; $('bar1').onclick = setBar1;
-$('tapShift').onclick = tapShift; $('tapGrid').onclick = tapGrid; $('tapClear').onclick = () => { taps = []; showTaps(); };
+$('tapShift').onclick = tapShift; $('tapGrid').onclick = tapGrid; $('half').onclick = halfBeat; $('steady').onclick = steadyFromAudio; $('tapClear').onclick = () => { taps = []; showTaps(); };
 $('markDrop').onclick = addDrop; $('markBuild').onclick = setBuild; $('markLift').onclick = addLift;
 $('markSection').onclick = addSection; $('markDelete').onclick = deleteMark;
 $('analyse').onclick = async () => { await fetch('/api/analyze', {method: 'POST', body: JSON.stringify({links: $('links').value})}); $('links').value = ''; };
@@ -500,7 +556,7 @@ document.addEventListener('keydown', e => {
     t: () => { if (playing) { taps.push(heardAt(e.timeStamp)); showTaps(); } else status('Play the song, then tap T on each beat'); },
     '[': () => shiftGrid(e.shiftKey ? -0.001 : -0.01), '{': () => shiftGrid(-0.001),
     ']': () => shiftGrid(e.shiftKey ? 0.001 : 0.01), '}': () => shiftGrid(0.001),
-    b: setBar1, d: addDrop, u: setBuild, l: addLift, s: addSection, x: deleteMark,
+    b: setBar1, h: halfBeat, g: steadyFromAudio, d: addDrop, u: setBuild, l: addLift, s: addSection, x: deleteMark,
     '+': () => $('zoomIn').click(), '=': () => $('zoomIn').click(), '-': () => $('zoomOut').click(),
   }[k];
   if (handled) { e.preventDefault(); handled(); }
