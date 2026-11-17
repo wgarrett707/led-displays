@@ -75,16 +75,19 @@ def hsvArray(hue, sat, val):
 def buildFirings(d, total):
     # When a drop's build-up fires its pulses, as beats before the drop (ascending). 'total' is the
     # build-up's length in beats. The drop's 'stages' are [beats before the drop, pulses per beat]: each
-    # rate holds from that point until the next stage; without stages it's 1 a beat, then 2 from halfway,
-    # then 4 for the last fifth. Pulses fall on whole fractions of a beat counted back from the drop, so
+    # rate holds from that point until the next stage; a rate of 0 is quiet (the music cuts out: no pulses,
+    # and the strips go dark, see quietSpans); without stages it's 1 a beat, then 2 from halfway, then 4 for
+    # the last fifth. Pulses fall on whole fractions of a beat counted back from the drop, so
     # they lock to the beat. With 'smooth', each stage speeds up gradually into the next instead of
     # jumping. The editor (editor.html, firings) works this out the same way to show the pulses.
     stages = d.get('stages') or [[total, 1], [0.5 * total, 2], [0.2 * total, 4]]
-    st = sorted([(min(float(b), total), float(r)) for b, r in stages if min(float(b), total) > 0 and float(r) > 0], reverse=True)
+    st = sorted([(min(float(b), total), float(r)) for b, r in stages if min(float(b), total) > 0 and float(r) >= 0], reverse=True)
     out = []
     for i, (b, r) in enumerate(st):
         end = st[i + 1][0] if i + 1 < len(st) else 0.0
-        if d.get('smooth') and i + 1 < len(st):
+        if r <= 0:
+            continue                                   # quiet
+        if d.get('smooth') and i + 1 < len(st) and st[i + 1][1] > 0:
             r2, seg = st[i + 1][1], b - end
             n = max(2, int(math.floor(seg * 128)) + 1)
             us = b + (end - b) * np.arange(n) / (n - 1)
@@ -99,6 +102,14 @@ def buildFirings(d, total):
                 out.append(m / r)
                 m -= 1
     return np.array(sorted(out))
+
+
+def quietSpans(d, total):
+    # The quiet stretches of a drop's build-up (rate 0: the music cuts out), as (from, to) beats before the
+    # drop, from > to
+    st = sorted([(min(float(b), total), float(r)) for b, r in (d.get('stages') or [])
+                 if min(float(b), total) > 0 and float(r) >= 0], reverse=True)
+    return [(b, st[i + 1][0] if i + 1 < len(st) else 0.0) for i, (b, r) in enumerate(st) if r <= 0]
 
 
 class Balls:
@@ -266,6 +277,11 @@ class Strips(threading.Thread):
                 every = 1 if 1.0 / st.period <= MAX_FLASHES else 2
                 if int(math.floor(beatsSince)) % every == 0 and (beatsSince % 1.0) * st.period < FLASH_ON:
                     out = np.maximum(out, 0.9)
+        if st.build is not None and st.buildDrop is not None and st.buildDrop.get('stages'):
+            # A quiet stretch in the build-up (the music cuts out): the strips go dark, in about 0.12 s
+            for start, end in self.quiet(st.buildDrop, self.clock.analysis):
+                if end < st.beatsToDrop <= start:
+                    out = out * max(0.0, 1 - (start - st.beatsToDrop) * st.period / 0.12)
         if st.fade < 1.0:
             # A fade-out marked in the editor: everything fades to black (and stays dark)
             out = out * st.fade
@@ -331,6 +347,16 @@ class Strips(threading.Thread):
                     continue
                 self.pulse(out, pos, rgb(hues[0] + 40 * p, 1.0 - 0.8 * p, 0.4 + 0.6 * p) * level, width=3.0, tail=12.0, inward=True)
         out += (p ** 2 * 0.3) * (self.d / LONGEST)[:, None] * rgb(0, 0, 1)
+
+    def quiet(self, d, a):
+        key = ('quiet', d['time'], d['buildStart'], repr(d.get('stages')), len(a.beats), float(a.beats[0]))
+        cache = getattr(self, '_firings', {})
+        if key not in cache:
+            if len(cache) > 32:
+                cache.clear()
+            cache[key] = quietSpans(d, round(a.beatAt(d['time'])) - a.beatAt(d['buildStart']))
+            self._firings = cache
+        return cache[key]
 
     def firings(self, d, a):
         key = (d['time'], d['buildStart'], repr(d.get('stages')), bool(d.get('smooth')), len(a.beats), float(a.beats[0]))

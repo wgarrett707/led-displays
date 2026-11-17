@@ -104,7 +104,8 @@ The lights follow each song's real beat instead of assuming 120 BPM.
   steady grid from the audio; nudge it 10 ms at a time; tempo x2 / /2; set bar 1 (B), drops (D), build-up starts (U), lifts (L) and
   sections (S); per drop, its build-up (Build-up panel): where it starts (bars before the drop), the speed the
   pulses fire at (speed changes "from N bars before the drop: R per beat", once a bar up to 8 per beat), in
-  steps or speeding up smoothly; cyan ticks under the waveform show exactly where each pulse fires
+  steps or speeding up smoothly, or quiet (rate 0: the music cuts out, no pulses and the strips go dark until
+  the drop; 'Add a quiet stretch' makes the last bar quiet); cyan ticks under the waveform show exactly where each pulse fires
   (`strips.buildFirings`, matched by `firings` in the page) and they can be clicked along with the song.
   Without settings: 1 a beat, 2 from halfway, 4 for the last fifth. Pulses count back from the beat
   nearest the drop, so they stay on the beat. Each drop hits with a white hit then a short strobe (default)

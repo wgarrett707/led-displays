@@ -125,6 +125,7 @@
       <div id="buildStages" style="margin-top:8px; display:grid; gap:6px"></div>
       <div class="row" style="margin-top:8px">
         <button id="buildAdd">Add a speed change</button>
+        <button id="buildQuiet" title="The music cuts out before the drop: no pulses, the strips go dark">Add a quiet stretch</button>
         <button id="buildAuto">Back to automatic</button>
         <label class="row"><input type="checkbox" id="buildClick"> Click on the build-up pulses</label>
       </div>
@@ -161,6 +162,7 @@
     <div><kbd>Ctrl</kbd>+<kbd>Z</kbd> undo &middot; click the waveform to jump</div>
     <div>Drops: a white hit, then a short strobe on the beat (or just one white flash: set it in the drop panel). Lifts: one big wave of colour.</div>
     <div>Fade out: the strips fade to black over its length and stay dark. Balls: balls bounce and collide, more on every beat, until they fill the strips.</div>
+    <div>Quiet: pick "quiet" as a build-up speed (or Add a quiet stretch) where the music cuts out before the drop; the strips go dark until it hits.</div>
     <div>Build-ups: pulses rush in from the far ends at the speeds in the Build-up panel; the cyan ticks under the waveform are where each pulse fires.</div>
     <div>Click track: high click on bar 1, low clicks on the other beats.</div>
   </div>
@@ -605,11 +607,13 @@ $('fxDelete').onclick = () => { const i = fxIndex(); if (i < 0) return; const e 
 
 // ---------------------------------------------------------------- build-ups
 // A drop's build-up fires pulses at set speeds: 'stages' are [beats before the drop, pulses per beat], each
-// holding until the next; 'smooth' speeds up gradually between them. Without stages: 1 a beat, 2 from
+// holding until the next (a rate of 0 is quiet: no pulses and the strips go dark, for when the music cuts
+// out before the drop); 'smooth' speeds up gradually between them. Without stages: 1 a beat, 2 from
 // halfway, 4 for the last fifth. firings() matches buildFirings in strips.py, so the ticks shown here are
 // exactly where the strips fire.
-const RATES = {0.25: 'once a bar', 0.5: 'every other beat', 1: '1 per beat', 2: '2 per beat (8ths)', 3: '3 per beat (triplets)',
+const RATES = {0: 'quiet (the music cuts out)', 0.25: 'once a bar', 0.5: 'every other beat', 1: '1 per beat', 2: '2 per beat (8ths)', 3: '3 per beat (triplets)',
   4: '4 per beat (16ths)', 6: '6 per beat', 8: '8 per beat (32nds)'};
+const RATE_ORDER = [0.25, 0.5, 1, 2, 3, 4, 6, 8, 0];   // slowest to fastest, then quiet
 function beatIndexAt(t) { const b = edit.beats; const i = Math.max(0, Math.min(b.length - 2, firstAfter(t) - 1)); return i + (t - b[i]) / (b[i + 1] - b[i]); }
 function timeAtBeat(x) { const b = edit.beats; const i = Math.max(0, Math.min(b.length - 2, Math.floor(x))); return b[i] + (x - i) * (b[i + 1] - b[i]); }
 // Build-ups count back from the beat nearest the drop, so the pulses stay on the beat (as in strips.py)
@@ -619,11 +623,12 @@ function autoStages(d) { const B = buildBeats(d); return [[B, 1], [0.5 * B, 2], 
 function stagesOf(d) { return d.stages && d.stages.length ? d.stages : autoStages(d); }
 function firings(d) {
   const total = buildBeats(d);
-  const st = stagesOf(d).map(([b, r]) => [Math.min(+b, total), +r]).filter(([b, r]) => b > 0 && r > 0).sort((x, y) => y[0] - x[0]);
+  const st = stagesOf(d).map(([b, r]) => [Math.min(+b, total), +r]).filter(([b, r]) => b > 0 && r >= 0).sort((x, y) => y[0] - x[0]);
   const out = [];
   st.forEach(([b, r], i) => {
     const end = i + 1 < st.length ? st[i + 1][0] : 0;
-    if (d.smooth && i + 1 < st.length) {
+    if (r <= 0) return;                                   // quiet
+    if (d.smooth && i + 1 < st.length && st[i + 1][1] > 0) {
       const r2 = st[i + 1][1], seg = b - end, n = Math.max(2, Math.floor(seg * 128) + 1);
       const us = Array.from({length: n}, (_, j) => b + (end - b) * j / (n - 1)), phase = [0];
       for (let j = 0; j + 1 < n; j++) phase.push(phase[j] + r * Math.pow(r2 / r, (b - (us[j] + us[j + 1]) / 2) / seg) * (us[j] - us[j + 1]));
@@ -638,6 +643,12 @@ function firings(d) {
 }
 // Every build-up pulse in the song, as times (s); worked out again only when the drops or the grid change
 let pulseCache = {key: null, list: []};
+// Quiet stretches of a build-up, as [from, to] times (s)
+function quietTimes(d) {
+  const total = buildBeats(d), di = dropBeat(d);
+  const st = (d.stages || []).map(([b, r]) => [Math.min(+b, total), +r]).filter(([b, r]) => b > 0 && r >= 0).sort((x, y) => y[0] - x[0]);
+  return st.map(([b, r], i) => r > 0 ? null : [timeAtBeat(di - b), timeAtBeat(di - (i + 1 < st.length ? st[i + 1][0] : 0))]).filter(x => x);
+}
 function buildPulses() {
   const b = edit.beats, key = JSON.stringify(edit.drops) + b.length + ',' + b[0] + ',' + b[b.length - 1];
   if (pulseCache.key !== key) {
@@ -666,7 +677,7 @@ function showBuild() {
   const i = buildDropIndex(), d = edit.drops[i], key = i + JSON.stringify(d || null) + edit.beats.length;
   if (key === shownBuild) return;
   shownBuild = key;
-  const controls = ['buildBars', 'buildStyle', 'buildAdd', 'buildAuto', 'dropStyle'];
+  const controls = ['buildBars', 'buildStyle', 'buildAdd', 'buildQuiet', 'buildAuto', 'dropStyle'];
   if (!d) {
     $('buildInfo').textContent = '(this song has no drops: mark one with D)';
     $('buildStages').innerHTML = '';
@@ -683,7 +694,7 @@ function showBuild() {
   if (total <= 0) {
     $('buildInfo').textContent = `(the drop at ${fmt(d.time)} has no build-up)`;
     box.innerHTML = '<span class="dim">Type how many bars before the drop it should start, or press <kbd>U</kbd> where it should start.</span>';
-    ['buildStyle', 'buildAdd', 'buildAuto'].forEach(id => $(id).disabled = true);
+    ['buildStyle', 'buildAdd', 'buildQuiet', 'buildAuto'].forEach(id => $(id).disabled = true);
     return;
   }
   $('buildInfo').textContent = `(into the drop at ${fmt(d.time)}, ${bars(total)} bars` + (d.stages ? ')' : '; automatic speeds)');
@@ -692,7 +703,7 @@ function showBuild() {
     const row = document.createElement('div'); row.className = 'row';
     const at = document.createElement('input'); at.type = 'number'; at.min = '0.25'; at.step = '0.25'; at.style.width = '72px'; at.value = bars(b);
     const rate = document.createElement('select');
-    for (const [v, text] of Object.entries(RATES)) { const o = document.createElement('option'); o.value = v; o.textContent = text; rate.appendChild(o); }
+    for (const v of RATE_ORDER) { const o = document.createElement('option'); o.value = v; o.textContent = RATES[v]; rate.appendChild(o); }
     if (!RATES[r]) { const o = document.createElement('option'); o.value = r; o.textContent = r + ' per beat'; rate.appendChild(o); }
     rate.value = String(r);
     row.append(k === 0 ? 'From ' : 'Then from ', at, ' bars before the drop: ', rate);
@@ -708,7 +719,7 @@ function editStages(i, fn, message) {
     const d = edit.drops[i];
     const st = stagesOf(d).map(([b, r]) => [Math.round(b), r]).sort((x, y) => y[0] - x[0]);
     fn(st);
-    d.stages = st.filter(([b, r]) => b > 0 && r > 0).sort((x, y) => y[0] - x[0]);
+    d.stages = st.filter(([b, r]) => b > 0 && r >= 0).sort((x, y) => y[0] - x[0]);
   });
 }
 $('buildBars').onchange = () => {
@@ -724,6 +735,12 @@ $('dropStyle').onchange = () => {
 };
 $('buildStyle').onchange = () => { const i = buildDropIndex(); act(null, () => { if ($('buildStyle').value) edit.drops[i].smooth = true; else delete edit.drops[i].smooth; }); };
 $('buildAdd').onclick = () => editStages(buildDropIndex(), s => { const last = s[s.length - 1]; s.push([Math.max(1, Math.round(last[0] / 2)), Math.min(8, last[1] * 2)]); }, 'Speed change added');
+// A quiet last bar before the drop (or the second half of the last stage, if that's shorter)
+$('buildQuiet').onclick = () => editStages(buildDropIndex(), s => {
+  const keep = s.filter(([b]) => b > 4);
+  const at = keep.length ? 4 : Math.max(1, Math.round(s[0][0] / 2));
+  s.splice(0, s.length, ...(keep.length ? keep : [s[0]]), [at, 0]);
+}, 'The music cuts out for the last bar before the drop');
 $('buildAuto').onclick = () => { const i = buildDropIndex(); act('Build-up back to automatic speeds', () => { delete edit.drops[i].stages; delete edit.drops[i].smooth; }); };
 
 // ---------------------------------------------------------------- section panel
@@ -832,6 +849,10 @@ function draw() {
     if (d.buildStart >= d.time || d.time < t0 || d.buildStart > t1) continue;
     const di = dropBeat(d), total = buildBeats(d);
     g.font = `${10 * r}px system-ui`;
+    for (const [qa, qb] of quietTimes(d)) {
+      if (qb < t0 || qa > t1) continue;
+      g.fillStyle = 'rgba(0,0,0,.55)'; g.fillRect(X(qa), 14 * r, X(qb) - X(qa), h - 14 * r);
+    }
     for (const [b, rt] of stagesOf(d)) {
       const t = timeAtBeat(di - Math.min(b, total));
       if (t >= t0 && t <= t1) { g.fillStyle = '#5fe0ff'; g.fillRect(X(t), h - 44 * r, r, 30 * r); g.fillText((RATES[rt] || rt + ' per beat').replace(/ \(.*\)/, ''), X(t) + 3 * r, h - 34 * r); }
@@ -865,6 +886,7 @@ function draw() {
     let k = firstNoteAfter(list.map(t => [t]), pos + 1e-6) - 1;
     const pulse = k >= 0 && list[k] >= build.buildStart ? Math.exp(-(pos - list[k]) * 14) : 0;
     sat = 90 - 80 * p; light = 15 + 50 * p * pulse + 10 * p;
+    if (quietTimes(build).some(([qa, qb]) => qa <= pos && pos < qb)) light = 2;
   }
   // Drops: the white hit; a strobe drop also flashes on the beat for 2 bars, like strips.py (every other
   // beat in fast songs, never over 3 flashes a second)
