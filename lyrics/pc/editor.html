@@ -338,7 +338,28 @@ function moveMarks(oldB, newB, delta) {
 function status(text, bad) { $('status').textContent = text || ''; $('status').className = bad ? 'bad' : ''; }
 
 function shiftGrid(s) { gridDelta = s; act(null, () => { edit.beats = edit.beats.map(b => b + s); edit.shift += s; }); }
-function setBar1() { const i = nearestBeat(position()); act('Bar 1 set at ' + fmt(edit.beats[i]), () => { edit.downbeat = ((i % 4) + 4) % 4; }); }
+// Bar 1 here. Marks on the old bar lines move to the nearest new ones (1 beat later or earlier, or 2 later),
+// unless 'Marks move with the grid' is unticked; marks off the bar lines stay.
+function setBar1() {
+  const i = nearestBeat(position()), od = edit.downbeat, nd = ((i % 4) + 4) % 4;
+  const k = [0, 1, 2, -1][(((nd - od) % 4) + 4) % 4];
+  let moved = 0;
+  act(null, () => { edit.downbeat = nd; if (k && $('marksFollow').checked) moved = shiftBarMarks(od, k); });
+  status('Bar 1 set at ' + fmt(edit.beats[i]) + (moved ? '; ' + moved + ' mark' + (moved > 1 ? 's' : '') + ' moved ' + Math.abs(k) + ' beat' + (Math.abs(k) > 1 ? 's' : '') + (k > 0 ? ' later' : ' earlier') + ' onto the new bar lines' : ''));
+}
+function shiftBarMarks(oldDownbeat, k) {
+  const onBar = t => { const x = beatIndexAt(t) - oldDownbeat; return Math.abs(x - 4 * Math.round(x / 4)) < 0.1; };
+  const to = t => Math.max(0, Math.min(duration(), timeAtBeat(Math.round(beatIndexAt(t)) + k)));
+  let moved = 0;
+  const move = (obj, keys) => { let any = false; for (const key of keys) if (onBar(obj[key])) { obj[key] = to(obj[key]); any = true; } if (any) moved++; };
+  edit.drops.forEach(x => move(x, ['time', 'buildStart']));
+  edit.lifts.forEach(x => move(x, ['time', 'buildStart']));
+  edit.sections.forEach(x => move(x, ['start']));
+  (edit.effects || []).forEach(x => move(x, ['time', 'end']));
+  edit.drops.sort((a, b) => a.time - b.time); edit.lifts.sort((a, b) => a.time - b.time);
+  edit.sections.sort((a, b) => a.start - b.start); (edit.effects || []).sort((a, b) => a.time - b.time);
+  return moved;
+}
 function addDrop() {
   const i = nearestBar(position()), t = edit.beats[i];
   if (edit.drops.some(d => Math.abs(d.time - t) < 0.1)) return status('There is already a drop there');
