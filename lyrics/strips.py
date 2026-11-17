@@ -23,8 +23,8 @@ STRIPS = [(0, 224, 207), (224, 224, 205)]
 LONGEST = max(lit for s, n, lit in STRIPS)
 # Pulses cross the longest strip in this many beats
 CROSS_BEATS = 1.25
-# After a drop: a white hit, then a strobe on the beat for this many bars (0 = no strobe). A drop set to
-# 'One white flash' in the editor (style 'flash') gets just the white hit.
+# After a drop: one white flash. A drop set to strobe in the editor (style 'strobe') also strobes on the
+# beat for this many bars.
 # Never faster than MAX_FLASHES a second (every other beat for fast songs).
 DROP_STROBE_BARS = 2
 MAX_FLASHES = 3.0
@@ -50,6 +50,9 @@ CALM_PATTERN = 'drift'
 BALL_WIDTH = 6
 BALL_START = 3
 BALL_STEP = 1 / 200.0
+# The chart-notes pattern shows beat pulses only after this many beats without a chart note (an intro, a
+# breakdown); shorter rests, like those in a repeating riff, stay as they are
+NOTES_GAP = 8
 # Chart notes held longer than this (s) are looked for no further back
 NOTE_HOLD_MAX = 8.0
 
@@ -246,14 +249,17 @@ class Strips(threading.Thread):
         hues = self.palette(st)
         level = 0.35 + 0.65 * st.energy
         a = self.clock.analysis
-        # The section's pattern from the editor; otherwise a calm one for quiet sections, else the song's
-        # Clone Hero chart notes when it has a chart, else beat pulses
+        # The section's pattern from the editor; otherwise the song's Clone Hero chart notes where the chart
+        # has notes, a calm pattern for other quiet sections, else beat pulses
         pattern = st.section.get('pattern')
         if not pattern:
-            if st.section.get('energy', 1.0) < CALM_BELOW and st.build is None:
+            hasChart = a is not None and a.hasNotes
+            if hasChart and a.sectionNotes[st.sectionIndex]:
+                pattern = 'notes'
+            elif st.section.get('energy', 1.0) < CALM_BELOW and st.build is None:
                 pattern = CALM_PATTERN
             else:
-                pattern = 'notes' if a is not None and a.hasNotes else 'pulses'
+                pattern = 'notes' if hasChart else 'pulses'
         if st.balls is not None:
             # A 'balls' effect marked in the editor takes over from the pattern while it runs
             self.drawBalls(out, st, hues, level)
@@ -273,7 +279,7 @@ class Strips(threading.Thread):
         if st.sinceDrop is not None:
             beatsSince = st.sinceDrop / st.period
             out += math.exp(-st.sinceDrop / 0.3) * 1.2   # white hit
-            if beatsSince < 4 * DROP_STROBE_BARS and (st.lastDrop or {}).get('style') != 'flash':
+            if beatsSince < 4 * DROP_STROBE_BARS and (st.lastDrop or {}).get('style') == 'strobe':
                 every = 1 if 1.0 / st.period <= MAX_FLASHES else 2
                 if int(math.floor(beatsSince)) % every == 0 and (beatsSince % 1.0) * st.period < FLASH_ON:
                     out = np.maximum(out, 0.9)
@@ -403,8 +409,12 @@ class Strips(threading.Thread):
         notes = lead[i0:i1]
         j0 = int(np.searchsorted(a.drumTimes, t - 0.6))
         j1 = int(np.searchsorted(a.drumTimes, t, 'right'))
-        quiet = 2 * st.period
-        busy = (len(notes) and (t - notes[-1, 0] < quiet or np.any(notes[:, 0] + notes[:, 2] > t))) or                (j1 > 0 and t - a.drumTimes[j1 - 1] < quiet)
+        # Beat pulses only where the chart has nothing for a while (NOTES_GAP beats), not in the rests of
+        # a riff; and not just before a note
+        gap, soon = NOTES_GAP * st.period, 2 * st.period
+        upcoming = (i1 < len(lead) and lead[i1, 0] - t < soon) or (j1 < len(a.drumTimes) and a.drumTimes[j1] - t < soon)
+        quiet = gap
+        busy = upcoming or (len(notes) and (t - notes[-1, 0] < quiet or np.any(notes[:, 0] + notes[:, 2] > t))) or                (j1 > 0 and t - a.drumTimes[j1 - 1] < quiet)
         if not busy:
             return self.draw_pulses(out, st, hues, level)
         out += rgb(hues[0], 0.9, 0.04 + 0.08 * st.energy)

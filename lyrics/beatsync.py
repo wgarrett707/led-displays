@@ -76,6 +76,10 @@ class Analysis:
         drums = np.array(chart.get('drums') or [], float).reshape(-1, 2)
         self.drumTimes, self.drumLanes = drums[:, 0].copy(), drums[:, 1].astype(int)
         self.hasNotes = len(self.lead) > 0 or len(self.drumTimes) > 0
+        # Per section: whether the chart has notes in it (those always play the notes, even quiet ones)
+        self.sectionNotes = [bool(np.any((self.lead[:, 0] >= s['start']) & (self.lead[:, 0] < s.get('end', 1e9))) or
+                                  np.any((self.drumTimes >= s['start']) & (self.drumTimes < s.get('end', 1e9))))
+                             for s in self.sections]
         # Kicks and snares the strips light up: no closer together than ACCENT_GAP, so a busy drum
         # part never turns into a strobe
         self.drumAccent = np.zeros(len(self.drumTimes), bool)

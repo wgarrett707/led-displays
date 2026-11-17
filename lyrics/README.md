@@ -108,8 +108,8 @@ The lights follow each song's real beat instead of assuming 120 BPM.
   the drop; 'Add a quiet stretch' makes the last bar quiet); cyan ticks under the waveform show exactly where each pulse fires
   (`strips.buildFirings`, matched by `firings` in the page) and they can be clicked along with the song.
   Without settings: 1 a beat, 2 from halfway, 4 for the last fifth. Pulses count back from the beat
-  nearest the drop, so they stay on the beat. Each drop hits with a white hit then a short strobe (default)
-  or just one white flash (`style: 'flash'`, set in the same panel). Strip effects at a mark (Strip effects panel, keys F and
+  nearest the drop, so they stay on the beat. Each drop hits with one white flash (default) or a white hit
+  then a short strobe (`style: 'strobe'`, set in the same panel). Strip effects at a mark (Strip effects panel, keys F and
   O; `effects` in the analysis, each {type, time, end}): a fade-out (the strips fade to black over its
   length, to the end of the song unless shortened, then stay dark, drops included) and 'balls' (balls
   bounce and collide, flashing white when they hit, a new one dropping into the biggest gap on the beat
@@ -140,7 +140,9 @@ The lights follow each song's real beat instead of assuming 120 BPM.
   and presets cover the same LEDs. Everything sits on a steady glow in the section's colours (`AMBIENT`)
   with the effects scaled down (`OVERLAY`) and through a soft limiter (`CEILING`), so pulses peak at about
   3x the glow instead of full white on black; build-ups climb back to full contrast by the drop. Quiet
-  sections (energy under `CALM_BELOW`) get a calm pattern (`drift`) unless one is set in the editor;
+  sections (energy under `CALM_BELOW`) without chart notes get a calm pattern (`drift`) unless one is set in
+  the editor (sections where the chart has notes always play them; the notes pattern shows beat pulses only
+  after `NOTES_GAP` beats without a note, so rests in a riff stay dark);
   calm patterns: `drift` (long colour bands drifting outward), `waves` (a soft wide wave each bar),
   `aurora` (slow shimmering curtains). A drop is a white hit then a strobe on the beat for
   `DROP_STROBE_BARS` bars, never above `MAX_FLASHES` a second. With no analysis, or paused, it stops
