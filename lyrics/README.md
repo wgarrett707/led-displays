@@ -116,7 +116,8 @@ The lights follow each song's real beat instead of assuming 120 BPM.
   until they fill the strips by its end; `strips.Balls`, simulated in fixed steps from the effect's start
   so it always plays the same; by default it runs to the next drop if one is within 32 bars), and two other
   ways of showing the chart's notes while the mark runs (keys P and C, by default to the end of the
-  section): 'notepulse' (the whole strip glows and swells on each note; fast runs blend into a shimmer)
+  section): 'notepulse' (the whole strip glows dimly and lights up on each note: a short note is a clear hit
+  fading in ~0.1 s, a held note hits as bright and fades out over its hold; `NOTE_PULSE_GLOW`, `NOTE_PULSE_FADE`)
   and 'notecolor' (the whole strip one colour, switching on each note: a colour per fret, 72 degrees
   apart from the section's first colour, open notes white; 60 ms crossfade). Drums-only charts follow
   the kicks and snares. Per

@@ -53,6 +53,10 @@ BALL_STEP = 1 / 200.0
 # The chart-notes pattern shows beat pulses only after this many beats without a chart note (an intro, a
 # breakdown); shorter rests, like those in a repeating riff, stay as they are
 NOTES_GAP = 8
+# 'notepulse' marks: the strip's glow between notes (0-1), and how fast a short note's hit fades (s; a
+# held note fades over its hold plus this)
+NOTE_PULSE_GLOW = 0.18
+NOTE_PULSE_FADE = 0.12
 # Chart notes held longer than this (s) are looked for no further back
 NOTE_HOLD_MAX = 8.0
 
@@ -312,8 +316,9 @@ class Strips(threading.Thread):
         return hits[1]
 
     def drawNoteStyle(self, out, st, hues, level):
-        # 'notepulse': the whole strip glows in the section's colours and swells on each note (a held note
-        # holds it up); fast runs blend into a shimmer rather than flashing. 'notecolor': the whole strip is
+        # 'notepulse': the whole strip glows dimly in the section's colours and lights up on each note: a
+        # short note is a clear hit (full, then gone in about a tenth of a second); a held note hits just as
+        # bright and fades out over the length of the hold. 'notecolor': the whole strip is
         # one colour and changes on each note: each fret its own colour, spread round the colour wheel from
         # the section's first colour (open notes white), crossfading in 60 ms.
         notes = self.noteHits(self.clock.analysis)
@@ -323,12 +328,15 @@ class Strips(threading.Thread):
             swell = 0.0
             for t0, lane, held in notes[max(0, i1 - 16):i1]:
                 age = t - t0
-                swell = max(swell, 0.7 if age < held else math.exp(-(age - held) / 0.25))
+                if held > 0:
+                    swell = max(swell, max(0.0, 1 - age / (held + NOTE_PULSE_FADE)) ** 1.5)
+                else:
+                    swell = max(swell, math.exp(-age / NOTE_PULSE_FADE))
             lane = notes[i1 - 1, 1] if i1 else 0
             hue = hues[0] + (hues[1] - hues[0]) * max(0.0, lane) / 4.0
             mix = (self.d / LONGEST)[:, None]
             glow = (1 - mix) * rgb(hue, 0.85, 1.0) + mix * rgb(hues[1], 0.85, 1.0)
-            out += glow * (level * (0.2 + 0.55 * swell))
+            out += glow * (level * (NOTE_PULSE_GLOW + (1 - NOTE_PULSE_GLOW) * swell))
             return
 
         def color(lane):
