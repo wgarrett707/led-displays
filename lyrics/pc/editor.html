@@ -608,11 +608,17 @@ function showBuild() {
   }
   controls.forEach(id => $(id).disabled = false);
   const total = buildBeats(d);
-  $('buildInfo').textContent = `(into the drop at ${fmt(d.time)}` + (total > 0 ? `, ${bars(total)} bars` : ', none') + (d.stages ? ')' : '; automatic speeds)');
   $('buildBars').value = total > 0 ? bars(total) : '';
   $('buildStyle').value = d.smooth ? 'smooth' : '';
   const box = $('buildStages');
   box.innerHTML = '';
+  if (total <= 0) {
+    $('buildInfo').textContent = `(the drop at ${fmt(d.time)} has no build-up)`;
+    box.innerHTML = '<span class="dim">Type how many bars before the drop it should start, or press <kbd>U</kbd> where it should start.</span>';
+    ['buildStyle', 'buildAdd', 'buildAuto'].forEach(id => $(id).disabled = true);
+    return;
+  }
+  $('buildInfo').textContent = `(into the drop at ${fmt(d.time)}, ${bars(total)} bars` + (d.stages ? ')' : '; automatic speeds)');
   const st = stagesOf(d).slice().sort((x, y) => y[0] - x[0]);
   st.forEach(([b, r], k) => {
     const row = document.createElement('div'); row.className = 'row';
@@ -880,7 +886,13 @@ document.addEventListener('keydown', e => {
   if (handled) { e.preventDefault(); handled(); }
 });
 
-loadSongs().then(() => { if ($('song').value) openSong($('song').value); });
+// A song can be opened straight from the address: ...#<Spotify track id>
+loadSongs().then(() => {
+  const want = location.hash.slice(1);
+  if (want && songs.some(x => x.id === want)) $('song').value = want;
+  if ($('song').value) openSong($('song').value);
+});
+$('song').addEventListener('change', () => window.history.replaceState(null, '', '#' + $('song').value));
 pollLog();
 </script>
 </body>
