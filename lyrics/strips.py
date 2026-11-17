@@ -63,7 +63,9 @@ NOTE_PULSE_GLOW = 0.18
 NOTE_PULSE_FADE = 0.12
 # A song with no analysis yet: one of these hues (blue, violet, rose, pink), and how bright (0-1)
 WAITING_HUES = (225, 270, 328, 302)
-WAITING_LEVEL = 0.75
+WAITING_LEVEL = 0.85
+# ... its comets: (LEDs a second, starting point 0-1, hue shift in degrees)
+WAITING_COMETS = ((38, 0.0, -14), (55, 0.37, 0), (72, 0.71, 14))
 # Chart notes held longer than this (s) are looked for no further back
 NOTE_HOLD_MAX = 8.0
 
@@ -241,15 +243,25 @@ class Strips(threading.Thread):
 
     def waiting(self, song, now):
         # One colour for the song (blue, violet, rose or pink: picked from its id, so it's the same each time
-        # it plays) with soft waves of brightness drifting slowly out from the matrix and a slight shimmer
-        # in the colour. On the clock, not the beat, so it looks right at any tempo.
+        # it plays): a dim glow in it with a slow wave running through, three soft comets travelling out from
+        # the matrix at different speeds (so they keep overtaking each other) in slightly different shades,
+        # and pale twinkles fading in and out. On the clock, not the beat, so it looks right at any tempo.
         hue = WAITING_HUES[zlib.crc32(song.encode()) % len(WAITING_HUES)]
         d = self.d / LONGEST
-        wave = (np.sin(2 * np.pi * (d * 1.7 - now * 0.11)) + 0.6 * np.sin(2 * np.pi * (d * 4.3 - now * 0.23))
-                + 0.35 * np.sin(2 * np.pi * (d * 9.1 + now * 0.07)))
-        bright = WAITING_LEVEL * (0.8 + 0.2 * np.clip(wave / 1.95, -1, 1))
-        shimmer = hue + 8 * np.sin(2 * np.pi * (d * 2.9 + now * 0.05))
-        return hsvArray(shimmer, 0.85, 1.0) * bright[:, None]
+        glow = 0.3 + 0.1 * np.sin(2 * np.pi * (d * 1.7 - now * 0.11))
+        out = hsvArray(hue + 8 * np.sin(2 * np.pi * (d * 2.9 + now * 0.05)), 0.85, 1.0) * glow[:, None]
+        span = LONGEST + 90
+        for speed, phase, shade in WAITING_COMETS:
+            pos = (now * speed + phase * span) % span - 45
+            x = self.d - pos
+            shape = np.where(x > 0, np.exp(-(x / 6.0) ** 2), np.exp(np.minimum(x, 0) / 35.0))
+            out += shape[:, None] * rgb(hue + shade, 0.75, 0.9)
+        slot = int(math.floor(now * 4))          # a new twinkle every quarter second, each lasting 1.2 s
+        for k in range(slot - 5, slot + 1):
+            age = now - k / 4.0
+            if 0 <= age < 1.2:
+                out[self.spots[k % len(self.spots), :2]] += rgb(hue, 0.35, 0.8) * math.sin(math.pi * age / 1.2)
+        return out * WAITING_LEVEL
 
     # ------------------------------------------------------------ drawing (by distance from the matrix)
 

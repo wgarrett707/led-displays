@@ -158,8 +158,8 @@ The lights follow each song's real beat instead of assuming 120 BPM.
   calm patterns: `drift` (long colour bands drifting outward), `waves` (a soft wide wave each bar),
   `aurora` (slow shimmering curtains). A drop is a white hit then a strobe on the beat for
   `DROP_STROBE_BARS` bars, never above `MAX_FLASHES` a second. A song with no analysis yet (while it
-  plays) gets a calm look of its own: one colour (blue, violet, rose or pink, picked per song) with soft
-  waves drifting out from the matrix, on the clock rather than the beat (`waiting`, `WAITING_HUES`, `WAITING_LEVEL`). Paused or
+  plays) gets a calm look of its own: one colour (blue, violet, rose or pink, picked per song): a dim glow
+  with a slow wave, three soft comets travelling out from the matrix at different speeds, pale twinkles; on the clock rather than the beat (`waiting`, `WAITING_HUES`, `WAITING_LEVEL`). Paused or
   nothing playing, it stops sending and WLED's own audio-reactive playlist (preset 20) takes over again.
 
 ## Behaviour
