@@ -110,7 +110,8 @@ The lights follow each song's real beat instead of assuming 120 BPM.
   (`strips.buildFirings`, matched by `firings` in the page) and they can be clicked along with the song.
   Without settings: 1 a beat, 2 from halfway, 4 for the last fifth. Pulses count back from the beat
   nearest the drop, so they stay on the beat. Each drop hits with one white flash (default) or a white hit
-  then a short strobe (`style: 'strobe'`, set in the same panel). Strip effects at a mark (Strip effects panel, keys F and
+  then a strobe (`style: 'strobe'`) for as many bars as set (`strobeBars`, default 2; never over 3 flashes a
+  second), set in the same panel. Strip effects at a mark (Strip effects panel, keys F and
   O; `effects` in the analysis, each {type, time, end}): a fade-out (the strips fade to black over its
   length, to the end of the song unless shortened, then stay dark, drops included) and 'balls' (balls
   bounce and collide, flashing white when they hit, a new one dropping into the biggest gap on the beat
@@ -121,7 +122,9 @@ The lights follow each song's real beat instead of assuming 120 BPM.
   fading in ~0.1 s, a held note hits as bright and fades out over its hold; `NOTE_PULSE_GLOW`, `NOTE_PULSE_FADE`)
   and 'notecolor' (the whole strip one colour, switching on each note: a colour per fret, 72 degrees
   apart from the section's first colour, open notes white; 60 ms crossfade). Drums-only charts follow
-  the kicks and snares. Per
+  the kicks and snares. 'notehype' (key Y) shows the chart's notes more intensely while it runs, whatever
+  the section's pattern: bigger, whiter, brighter pulses with longer tails (`HYPE_NOTES`), a burst of light at
+  the matrix end on each note, bigger kick swells, more sparkles, full contrast. Per
   section: label, chorus, strip pattern (chart notes, pulses, breathe, chase, sparkle,
   rainbow, solid, strobe, off) and colours. The strip preview follows the chart's notes when there is one. Save sends it to the Pi, which reloads it within seconds;
   hand-edited songs are never overwritten by the automatic analysis.

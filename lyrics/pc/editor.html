@@ -115,6 +115,7 @@
         <span class="dim">Chart notes, from here to the end of the section:</span>
         <button id="fxNotePulse" title="P">Strip pulses on each note</button>
         <button id="fxNoteColor" title="C">Colour changes on each note</button>
+        <button id="fxNoteHype" title="Y">Hype the notes</button>
       </div>
       <div class="row" style="margin-top:8px">
         <label>Lasts <input type="number" id="fxLen" min="0.25" step="0.25" style="width:72px"> <span id="fxUnit"></span></label>
@@ -124,7 +125,8 @@
     <div class="box" id="buildBox">
       <h3>Drop and build-up <span id="buildInfo" class="dim" style="text-transform:none"></span></h3>
       <div class="row" style="margin-bottom:8px">
-        <label>The drop hits with <select id="dropStyle"><option value="">one white flash</option><option value="strobe">a white hit, then a short strobe</option></select></label>
+        <label>The drop hits with <select id="dropStyle"><option value="">one white flash</option><option value="strobe">a white hit, then a strobe</option></select></label>
+        <label id="strobeBarsBox">for <input type="number" id="strobeBars" min="1" max="32" step="1" style="width:60px"> bars</label>
       </div>
       <div class="row">
         <label>Starts <input type="number" id="buildBars" min="0.25" step="0.25" style="width:72px"> bars before the drop</label>
@@ -166,10 +168,10 @@
     <div><kbd>B</kbd> the nearest beat is bar 1 &middot; <kbd>H</kbd> half a beat &middot; <kbd>G</kbd> steady grid from the audio (marks move with the grid unless that box is unticked)</div>
     <div><kbd>D</kbd> drop, <kbd>U</kbd> build-up start, <kbd>L</kbd> lift, <kbd>S</kbd> new section</div>
     <div><kbd>F</kbd> fade out from here &middot; <kbd>O</kbd> balls fill up from here</div>
-    <div><kbd>P</kbd> strip pulses on each chart note &middot; <kbd>C</kbd> colour changes on each chart note (to the end of the section)</div>
+    <div><kbd>P</kbd> strip pulses on each chart note &middot; <kbd>C</kbd> colour changes on each chart note &middot; <kbd>Y</kbd> hype the chart notes (to the end of the section)</div>
     <div><kbd>X</kbd> delete the nearest mark &middot; <kbd>Delete</kbd> delete the selected chart notes</div>
     <div><kbd>Ctrl</kbd>+<kbd>Z</kbd> undo &middot; click the waveform to jump</div>
-    <div>Drops: one white flash (or a white hit then a short strobe: set it in the drop panel). Lifts: one big wave of colour.</div>
+    <div>Drops: one white flash (or a white hit then a strobe for as many bars as you set, in the drop panel; never over 3 flashes a second). Lifts: one big wave of colour.</div>
     <div>Fade out: the strips fade to black over its length and stay dark. Balls: balls bounce and collide, more on every beat, until they fill the strips.</div>
     <div>Quiet: pick "quiet" as a build-up speed (or Add a quiet stretch) where the music cuts out before the drop; the strips go dark until it hits.</div>
     <div>Build-ups: pulses rush in from the far ends at the speeds in the Build-up panel; the cyan ticks under the waveform are where each pulse fires.</div>
@@ -358,7 +360,7 @@ function deleteMark() {
   const t = position(), marks = [];
   edit.drops.forEach(d => { marks.push({t: d.time, kind: 'drop', ref: d}); marks.push({t: d.buildStart, kind: 'build', ref: d}); });
   edit.lifts.forEach(d => marks.push({t: d.time, kind: 'lift', ref: d}));
-  (edit.effects || []).forEach(e => marks.push({t: e.time, kind: {fadeout: 'fade-out', balls: 'balls effect', notepulse: 'pulse-on-notes mark', notecolor: 'colour-on-notes mark'}[e.type], ref: e}));
+  (edit.effects || []).forEach(e => marks.push({t: e.time, kind: {fadeout: 'fade-out', balls: 'balls effect', notepulse: 'pulse-on-notes mark', notecolor: 'colour-on-notes mark', notehype: 'hype-notes mark'}[e.type], ref: e}));
   edit.sections.forEach((s, i) => { if (i > 0) marks.push({t: s.start, kind: 'section', ref: s}); });
   marks.sort((a, b) => Math.abs(a.t - t) - Math.abs(b.t - t));
   const m = marks[0];
@@ -617,8 +619,9 @@ $('notes').onpointerup = e => {
 // dark) and 'balls' (balls bouncing and colliding, more of them on every beat until they fill the strips;
 // strips.py Balls). A fade-out lasts to the end of the song unless shortened; balls run to the next drop
 // if there's one within 32 bars (a build-up into it), else 8 bars.
-const FX_NAMES = {fadeout: 'Fade out', balls: 'Balls fill up', notepulse: 'Strip pulses on each note', notecolor: 'Colour changes on each note'};
-const FX_COLORS = {notepulse: '#ff7ad9', notecolor: '#ffd84d'};
+const FX_NAMES = {fadeout: 'Fade out', balls: 'Balls fill up', notepulse: 'Strip pulses on each note', notecolor: 'Colour changes on each note', notehype: 'Hype the notes'};
+const FX_COLORS = {notepulse: '#ff7ad9', notecolor: '#ffd84d', notehype: '#ff5a3c'};
+const FX_LABELS = {notepulse: 'pulse on notes', notecolor: 'colour on notes', notehype: 'hype notes'};
 function fxIndex() {
   const t = position(), fx = edit.effects;
   let i = fx.findIndex(e => e.time <= t && t < e.end);
@@ -661,6 +664,7 @@ function showFx() {
 }
 $('fxFade').onclick = addFade; $('fxBalls').onclick = addBalls;
 $('fxNotePulse').onclick = () => addNoteStyle('notepulse'); $('fxNoteColor').onclick = () => addNoteStyle('notecolor');
+$('fxNoteHype').onclick = () => addNoteStyle('notehype');
 $('fxLen').onchange = () => {
   const i = fxIndex(), v = +$('fxLen').value;
   if (!(v > 0) || i < 0) return;
@@ -743,7 +747,7 @@ function showBuild() {
   const i = buildDropIndex(), d = edit.drops[i], key = i + JSON.stringify(d || null) + edit.beats.length;
   if (key === shownBuild) return;
   shownBuild = key;
-  const controls = ['buildBars', 'buildStyle', 'buildAdd', 'buildQuiet', 'buildAuto', 'dropStyle'];
+  const controls = ['buildBars', 'buildStyle', 'buildAdd', 'buildQuiet', 'buildAuto', 'dropStyle', 'strobeBars'];
   if (!d) {
     $('buildInfo').textContent = '(this song has no drops: mark one with D)';
     $('buildStages').innerHTML = '';
@@ -752,6 +756,8 @@ function showBuild() {
   }
   controls.forEach(id => $(id).disabled = false);
   $('dropStyle').value = d.style === 'strobe' ? 'strobe' : '';
+  $('strobeBarsBox').style.display = d.style === 'strobe' ? '' : 'none';
+  $('strobeBars').value = d.strobeBars || 2;
   const total = buildBeats(d);
   $('buildBars').value = total > 0 ? bars(total) : '';
   $('buildStyle').value = d.smooth ? 'smooth' : '';
@@ -798,6 +804,10 @@ $('dropStyle').onchange = () => {
   act('The drop at ' + fmt(edit.drops[i].time) + (strobe ? ' hits with a white hit and a short strobe' : ' hits with one white flash'), () => {
     if (strobe) edit.drops[i].style = 'strobe'; else delete edit.drops[i].style;
   });
+};
+$('strobeBars').onchange = () => {
+  const i = buildDropIndex(), v = Math.max(1, Math.min(32, Math.round(+$('strobeBars').value || 2)));
+  act('The drop at ' + fmt(edit.drops[i].time) + ' strobes for ' + v + ' bar' + (v > 1 ? 's' : ''), () => { if (v === 2) delete edit.drops[i].strobeBars; else edit.drops[i].strobeBars = v; });
 };
 $('buildStyle').onchange = () => { const i = buildDropIndex(); act(null, () => { if ($('buildStyle').value) edit.drops[i].smooth = true; else delete edit.drops[i].smooth; }); };
 $('buildAdd').onclick = () => editStages(buildDropIndex(), s => { const last = s[s.length - 1]; s.push([Math.max(1, Math.round(last[0] / 2)), Math.min(8, last[1] * 2)]); }, 'Speed change added');
@@ -871,7 +881,7 @@ function drawMarks(g, X, t0, t1, top, h, r, labels) {
     } else if (FX_COLORS[e.type]) {
       g.fillStyle = FX_COLORS[e.type]; g.globalAlpha = 0.12; g.fillRect(X(e.time), top + 12 * r, X(e.end) - X(e.time), h - 12 * r);
       g.globalAlpha = 1; g.fillRect(X(e.time) - r, top, 2 * r, h); g.fillRect(X(e.time), top + h - 3 * r, X(e.end) - X(e.time), 3 * r);
-      if (labels) { g.font = `${11 * r}px system-ui`; g.fillText(e.type === 'notepulse' ? 'pulse on notes' : 'colour on notes', X(e.time) + 4 * r, top + 24 * r); }
+      if (labels) { g.font = `${11 * r}px system-ui`; g.fillText(FX_LABELS[e.type], X(e.time) + 4 * r, top + 24 * r); }
     } else {
       g.fillStyle = 'rgba(109,255,168,.10)'; g.fillRect(X(e.time), top + 12 * r, X(e.end) - X(e.time), h - 12 * r);
       g.fillStyle = '#6dffa8'; g.fillRect(X(e.time) - r, top, 2 * r, h);
@@ -950,6 +960,7 @@ function draw() {
     }
   }
   let light = 10 + 45 * level, sat = 90;
+  if (edit.chart && (edit.effects || []).some(e => e.type === 'notehype' && e.time <= pos && pos < e.end)) { light = Math.min(80, light * 1.4); sat = Math.min(sat, 60); }
   const build = edit.drops.find(d => d.buildStart <= pos && pos < d.time);
   if (build) {
     const p = (pos - build.buildStart) / (build.time - build.buildStart), list = buildPulses();
@@ -961,7 +972,7 @@ function draw() {
   // Drops: the white hit; a strobe drop also flashes on the beat for 2 bars, like strips.py (every other
   // beat in fast songs, never over 3 flashes a second)
   const strobing = d => { const bt = (pos - d.time) / period(), every = 1 / period() > 3 ? 2 : 1;
-                          return d.style === 'strobe' && bt < 8 && Math.floor(bt) % every === 0 && (bt % 1) * period() < 0.05; };
+                          return d.style === 'strobe' && bt < 4 * (d.strobeBars || 2) && Math.floor(bt) % every === 0 && (bt % 1) * period() < 0.05; };
   const drop = edit.drops.find(d => pos >= d.time && (pos - d.time < 0.35 || strobing(d)));
   const balls = (edit.effects || []).find(e => e.type === 'balls' && e.time <= pos && pos < e.end);
   if (balls) { const p = (pos - balls.time) / (balls.end - balls.time); light = 12 + 45 * p; sat = 85; hue = ha + (hb - ha) * ((pos * 1.7) % 1); }
@@ -1076,7 +1087,7 @@ document.addEventListener('keydown', e => {
     '[': () => shiftGrid(e.shiftKey ? -0.001 : -0.01), '{': () => shiftGrid(-0.001),
     ']': () => shiftGrid(e.shiftKey ? 0.001 : 0.01), '}': () => shiftGrid(0.001),
     b: setBar1, h: halfBeat, g: steadyFromAudio, d: addDrop, u: setBuild, l: addLift, s: addSection, x: deleteMark,
-    delete: deleteNotes, backspace: deleteNotes, escape: selectNone, f: addFade, o: addBalls, p: () => addNoteStyle('notepulse'), c: () => addNoteStyle('notecolor'),
+    delete: deleteNotes, backspace: deleteNotes, escape: selectNone, f: addFade, o: addBalls, p: () => addNoteStyle('notepulse'), c: () => addNoteStyle('notecolor'), y: () => addNoteStyle('notehype'),
     '+': () => $('zoomIn').click(), '=': () => $('zoomIn').click(), '-': () => $('zoomOut').click(),
   }[k];
   if (handled) { e.preventDefault(); handled(); }

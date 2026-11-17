@@ -24,7 +24,7 @@ LONGEST = max(lit for s, n, lit in STRIPS)
 # Pulses cross the longest strip in this many beats
 CROSS_BEATS = 1.25
 # After a drop: one white flash. A drop set to strobe in the editor (style 'strobe') also strobes on the
-# beat for this many bars.
+# beat, for its 'strobeBars' bars (set in the editor) or else this many. Never over MAX_FLASHES a second.
 # Never faster than MAX_FLASHES a second (every other beat for fast songs).
 DROP_STROBE_BARS = 2
 MAX_FLASHES = 3.0
@@ -53,6 +53,9 @@ BALL_STEP = 1 / 200.0
 # The chart-notes pattern shows beat pulses only after this many beats without a chart note (an intro, a
 # breakdown); shorter rests, like those in a repeating riff, stay as they are
 NOTES_GAP = 8
+# 'notehype' marks: chart-note pulses (width, tail, saturation, brightness, held-note streak) instead of
+# the usual (3, 10, 0.85, 1.0, 0.4)
+HYPE_NOTES = (5.0, 18.0, 0.55, 1.35, 0.6)
 # 'notepulse' marks: the strip's glow between notes (0-1), and how fast a short note's hit fades (s; a
 # held note fades over its hold plus this)
 NOTE_PULSE_GLOW = 0.18
@@ -199,6 +202,7 @@ class Strips(threading.Thread):
         self.d = np.arange(LONGEST, dtype=np.float32)   # distance from the matrix, in LEDs
         # Where each drum hit's sparkles land (the same LEDs every time the hit plays)
         self.spots = np.random.RandomState(1).randint(0, LONGEST, (4096, 40))
+        self.burst = np.exp(-self.d / 25.0)[:, None]      # where a 'hype' note's burst of light lands
         self.raw = np.zeros((sum(n for s, n, lit in STRIPS), 3), np.uint8)   # the curved LEDs stay 0
 
     def run(self):
@@ -272,6 +276,10 @@ class Strips(threading.Thread):
             # So does another way of showing the chart's notes, marked in the editor
             self.drawNoteStyle(out, st, hues, level)
             pattern = st.noteStyle
+        elif st.hype and a is not None and a.hasNotes:
+            # And a 'hype' mark: the chart's notes, more intense (see draw_notes)
+            self.draw_notes(out, st, hues, level)
+            pattern = 'notes'
         elif st.build is not None and pattern != 'off':
             self.buildUp(out, st, hues, level)
         else:
@@ -285,9 +293,12 @@ class Strips(threading.Thread):
             out = self.soften(out, st, hues)
 
         if st.sinceDrop is not None:
-            beatsSince = st.sinceDrop / st.period
+            drop = st.lastDrop or {}
+            # Beats since the drop, counted on the beat grid (dividing the time by the current beat's length
+            # jumped back a little where beat lengths differ by a millisecond, splitting a strobe flash in two)
+            beatsSince = st.index - a.beatAt(drop['time']) if a is not None and drop else st.sinceDrop / st.period
             out += math.exp(-st.sinceDrop / 0.3) * 1.2   # white hit
-            if beatsSince < 4 * DROP_STROBE_BARS and (st.lastDrop or {}).get('style') == 'strobe':
+            if drop.get('style') == 'strobe' and beatsSince < 4 * drop.get('strobeBars', DROP_STROBE_BARS):
                 every = 1 if 1.0 / st.period <= MAX_FLASHES else 2
                 if int(math.floor(beatsSince)) % every == 0 and (beatsSince % 1.0) * st.period < FLASH_ON:
                     out = np.maximum(out, 0.9)
@@ -382,6 +393,8 @@ class Strips(threading.Thread):
         # The glow under everything, the effects brought closer to it, and a soft limiter on top. A
         # build-up climbs back to full contrast as its drop gets close.
         p = st.build ** 2 if st.build is not None else 0.0
+        if st.hype:
+            p = 1.0     # a 'hype' mark: full contrast
         gain = OVERLAY + (1 - OVERLAY) * p
         ceiling = CEILING + (1.2 - CEILING) * p
         mix = (self.d / LONGEST)[:, None]
@@ -455,6 +468,8 @@ class Strips(threading.Thread):
         # the matrix as a pulse coloured by its lane, and a held note leaves a streak behind it for as
         # long as it's held. Kicks swell the whole strip, snares throw pale sparkles everywhere, hi-hats
         # and cymbals sparkle. Where the chart has nothing (an intro, a breakdown), beat pulses instead.
+        # Under a 'hype' mark: bigger, whiter, brighter pulses with longer tails, a burst of light at the
+        # matrix end on each note, bigger kick swells and more sparkles (and full contrast, see soften).
         a = self.clock.analysis
         if a is None or not a.hasNotes:
             return self.draw_pulses(out, st, hues, level)
@@ -476,6 +491,7 @@ class Strips(threading.Thread):
         if not busy:
             return self.draw_pulses(out, st, hues, level)
         out += rgb(hues[0], 0.9, 0.04 + 0.08 * st.energy)
+        width, tail, sat, bright, streak = HYPE_NOTES if st.hype else (3.0, 10.0, 0.85, 1.0, 0.4)
         # All the notes at once: one row per note still on the strip
         ages = t - notes[:, 0]
         held = notes[:, 2]
@@ -486,23 +502,30 @@ class Strips(threading.Thread):
             lanes, ages, held, heads, tails = notes[live, 1], ages[live], held[live], heads[live], tails[live]
             hue = hues[0] + (hues[1] - hues[0]) * np.maximum(lanes, 0) / 4.0
             # An open note (lane -1) is all lanes at once: nearly white
-            colors = np.where((lanes >= 0)[:, None], hsvArray(hue, 0.85, level), hsvArray(hue, 0.3, level))
+            colors = np.where((lanes >= 0)[:, None], hsvArray(hue, sat, level * bright), hsvArray(hue, 0.3, level * bright))
             x = self.d[None, :] - heads[:, None]
-            shape = np.where(x > 0, np.exp(-(x / 3.0) ** 2), np.exp(np.minimum(x, 0) / 10.0)) * (ages < window)[:, None]
+            shape = np.where(x > 0, np.exp(-(x / width) ** 2), np.exp(np.minimum(x, 0) / tail)) * (ages < window)[:, None]
             # A held note's streak runs from where it started to where it is now
-            shape += 0.4 * ((self.d[None, :] >= tails[:, None]) & (x <= 0) & ((held > 0) & (heads - tails > 1))[:, None])
+            shape += streak * ((self.d[None, :] >= tails[:, None]) & (x <= 0) & ((held > 0) & (heads - tails > 1))[:, None])
             out += (shape.T @ colors).astype(np.float32)
+            if st.hype:
+                # A burst of light at the matrix end as each note fires
+                fresh = ages < 0.25
+                if fresh.any():
+                    out += self.burst * (np.exp(-ages[fresh] / 0.08)[:, None] * colors[fresh]).sum(0).astype(np.float32)
         for k in range(j0, j1):
             age = t - a.drumTimes[k]
             lane = a.drumLanes[k]
             if lane == 0:
                 if a.drumAccent[k]:
-                    out += rgb(hues[0], 0.85, 0.3 * level * math.exp(-age / 0.18))
+                    out += rgb(hues[0], 0.85, (0.5 if st.hype else 0.3) * level * math.exp(-age / 0.18))
                 continue
             if lane == 1 and not a.drumAccent[k]:
                 continue
-            count, sat, strength, fade = {1: (40, 0.2, 0.9, 0.12), 2: (6, 0.3, 0.35, 0.12)}.get(lane, (14, 0.3, 0.8, 0.3))
-            out[self.spots[k % len(self.spots), :count]] += rgb(hues[1], sat, 1.0) * (level * strength * math.exp(-age / fade))
+            count, dsat, strength, fade = {1: (40, 0.2, 0.9, 0.12), 2: (6, 0.3, 0.35, 0.12)}.get(lane, (14, 0.3, 0.8, 0.3))
+            if st.hype:
+                count, strength = min(40, int(count * 1.5)), strength * 1.3
+            out[self.spots[k % len(self.spots), :count]] += rgb(hues[1], dsat, 1.0) * (level * strength * math.exp(-age / fade))
 
     def draw_breathe(self, out, st, hues, level):
         # The whole strip swells on each beat, shading from one colour at the matrix to the other at the ends

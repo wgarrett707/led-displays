@@ -112,6 +112,8 @@ def save(trackId, edit):
         # How the drop hits: one white flash, or with 'strobe' a white hit then a short strobe
         if d.get('style') == 'strobe':
             out['style'] = 'strobe'
+            if d.get('strobeBars'):
+                out['strobeBars'] = max(1, min(32, int(d['strobeBars'])))
         return out
     r['drops'] = sorted([drop(d) for d in edit['drops']], key=lambda d: d['time'])
     r['lifts'] = sorted([{'time': round(float(d['time']), 3), 'strength': float(d.get('strength', 5)),
@@ -132,7 +134,7 @@ def save(trackId, edit):
     # ('notepulse', 'notecolor'), each from 'time' to 'end'
     r['effects'] = sorted([{'type': e['type'], 'time': round(float(e['time']), 3), 'end': round(float(e['end']), 3)}
                            for e in edit.get('effects') or []
-                           if e.get('type') in ('fadeout', 'balls', 'notepulse', 'notecolor') and float(e['end']) > float(e['time'])],
+                           if e.get('type') in ('fadeout', 'balls', 'notepulse', 'notecolor', 'notehype') and float(e['end']) > float(e['time'])],
                           key=lambda e: e['time'])
     r['edited'] = True
     r['editedAt'] = time.strftime('%Y-%m-%d %H:%M')
