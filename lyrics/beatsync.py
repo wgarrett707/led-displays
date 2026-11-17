@@ -213,6 +213,8 @@ class BeatClock(threading.Thread):
         self.candidate = None
         self.checked = 0.0
         self.loadedAt = 0.0
+        # True once the current song is known to have no analysis (none yet, or no audio was found for it)
+        self.missing = False
         self.anchors = collections.deque(maxlen=ANCHORS)
         self.anchorTrack = None
         self.roomSaved = 0.0
@@ -258,6 +260,14 @@ class BeatClock(threading.Thread):
             t = self.songTime(now + lead)
         return BeatState(a, t + offset)
 
+    def unanalysed(self):
+        # The id of the song playing now if it's known to have no analysis, else None
+        with self.lock:
+            p = self.playback
+            if p is not None and p.playing and self.analysis is None and self.missing and p.id == self.trackId:
+                return p.id
+        return None
+
     def run(self):
         self.mic.start()
         while True:
@@ -277,6 +287,7 @@ class BeatClock(threading.Thread):
                 self.trackId = p.id if p else None
                 self.analysis, self.offset, self.locked, self.candidate = None, self.room, False, None
                 self.validFrom, self.checked, self.loadedAt = now, 0.0, 0.0
+                self.missing = False
             elif old is not None and p.playing != old.playing:
                 # Paused or resumed: microphone history from before doesn't line up
                 self.validFrom = now
@@ -294,15 +305,17 @@ class BeatClock(threading.Thread):
                 data = json.load(f)
             self.loadedAt = changed
             if data.get('error'):
+                self.missing = True
                 return
             a = Analysis(data)
             with self.lock:
                 if self.trackId == p.id:
-                    self.analysis = a
+                    self.analysis, self.missing = a, False
             log('Beats for %s: %.1f BPM, %d drops%s%s' % (p.title, a.tempo, len(a.drops),
                                                          ' (edited)' if data.get('edited') else '',
                                                          ', notes from %s' % a.chartName if a.hasNotes else ''))
         else:
+            self.missing = True
             pending = os.path.join(PENDING_DIR, p.id + '.json')
             if not os.path.exists(pending):
                 with open(pending, 'w') as f:

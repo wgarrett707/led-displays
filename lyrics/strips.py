@@ -8,6 +8,7 @@ import socket
 import struct
 import threading
 import time
+import zlib
 import numpy as np
 
 WLED_IP = '192.168.10.11'   # replaced by the address WLED's audio packets come from
@@ -60,6 +61,9 @@ HYPE_NOTES = (5.0, 18.0, 0.55, 1.35, 0.6)
 # held note fades over its hold plus this)
 NOTE_PULSE_GLOW = 0.18
 NOTE_PULSE_FADE = 0.12
+# A song with no analysis yet: one of these hues (blue, violet, rose, pink), and how bright (0-1)
+WAITING_HUES = (225, 270, 328, 302)
+WAITING_LEVEL = 0.75
 # Chart notes held longer than this (s) are looked for no further back
 NOTE_HOLD_MAX = 8.0
 
@@ -212,11 +216,17 @@ class Strips(threading.Thread):
             try:
                 st = self.clock.state(time.monotonic(), LEAD)
                 if st is None:
-                    # Nothing to follow: stop sending and WLED takes its own effects back
-                    time.sleep(0.1)
-                    next_ = time.monotonic()
-                    continue
-                self.send(self.render(st))
+                    song = self.clock.unanalysed()
+                    if song is None:
+                        # Nothing to follow (paused, nothing playing): stop sending and WLED takes its own
+                        # effects back
+                        time.sleep(0.1)
+                        next_ = time.monotonic()
+                        continue
+                    # A song that hasn't been analysed yet: a calm look of its own
+                    self.send(self.waiting(song, time.monotonic()))
+                else:
+                    self.send(self.render(st))
             except Exception as e:
                 print('Strips: %r' % e, flush=True)
                 time.sleep(1)
@@ -226,6 +236,20 @@ class Strips(threading.Thread):
                 time.sleep(delay)
             else:
                 next_ = time.monotonic()
+
+    # ------------------------------------------------------------ a song with no analysis yet
+
+    def waiting(self, song, now):
+        # One colour for the song (blue, violet, rose or pink: picked from its id, so it's the same each time
+        # it plays) with soft waves of brightness drifting slowly out from the matrix and a slight shimmer
+        # in the colour. On the clock, not the beat, so it looks right at any tempo.
+        hue = WAITING_HUES[zlib.crc32(song.encode()) % len(WAITING_HUES)]
+        d = self.d / LONGEST
+        wave = (np.sin(2 * np.pi * (d * 1.7 - now * 0.11)) + 0.6 * np.sin(2 * np.pi * (d * 4.3 - now * 0.23))
+                + 0.35 * np.sin(2 * np.pi * (d * 9.1 + now * 0.07)))
+        bright = WAITING_LEVEL * (0.8 + 0.2 * np.clip(wave / 1.95, -1, 1))
+        shimmer = hue + 8 * np.sin(2 * np.pi * (d * 2.9 + now * 0.05))
+        return hsvArray(shimmer, 0.85, 1.0) * bright[:, None]
 
     # ------------------------------------------------------------ drawing (by distance from the matrix)
 
