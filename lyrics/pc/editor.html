@@ -102,6 +102,19 @@
         <button id="markDelete" title="X">Delete nearest mark</button>
       </div>
     </div>
+    <div class="box" id="buildBox">
+      <h3>Build-up <span id="buildInfo" class="dim" style="text-transform:none"></span></h3>
+      <div class="row">
+        <label>Starts <input type="number" id="buildBars" min="0.25" step="0.25" style="width:72px"> bars before the drop</label>
+        <label>Speeds up <select id="buildStyle"><option value="">in steps</option><option value="smooth">smoothly</option></select></label>
+      </div>
+      <div id="buildStages" style="margin-top:8px; display:grid; gap:6px"></div>
+      <div class="row" style="margin-top:8px">
+        <button id="buildAdd">Add a speed change</button>
+        <button id="buildAuto">Back to automatic</button>
+        <label class="row"><input type="checkbox" id="buildClick"> Click on the build-up pulses</label>
+      </div>
+    </div>
     <div class="box">
       <h3>Section at the playhead</h3>
       <div class="row">
@@ -132,6 +145,7 @@
     <div><kbd>X</kbd> delete the nearest mark &middot; <kbd>Delete</kbd> delete the selected chart notes</div>
     <div><kbd>Ctrl</kbd>+<kbd>Z</kbd> undo &middot; click the waveform to jump</div>
     <div>Drops: a white hit, then a short strobe on the beat. Lifts: one big wave of colour.</div>
+    <div>Build-ups: pulses rush in from the far ends at the speeds in the Build-up panel; the cyan ticks under the waveform are where each pulse fires.</div>
     <div>Click track: high click on bar 1, low clicks on the other beats.</div>
   </div>
 </main>
@@ -206,6 +220,19 @@ setInterval(() => {
     osc.connect(g); g.connect(clickGain);
     osc.start(when); osc.stop(when + 0.05);
   }
+  if ($('buildClick').checked) {
+    for (const t of buildPulses()) {
+      if (t <= scheduledTo || t > horizon) continue;
+      const when = startedCtx + (t - startedPos);
+      if (when < ctx.currentTime) continue;
+      const osc = ctx.createOscillator(), g = ctx.createGain();
+      osc.frequency.value = 3200;
+      g.gain.setValueAtTime(0.35, when);
+      g.gain.exponentialRampToValueAtTime(0.001, when + 0.025);
+      osc.connect(g); g.connect(clickGain);
+      osc.start(when); osc.stop(when + 0.03);
+    }
+  }
   scheduledTo = horizon;
 }, 25);
 
@@ -225,7 +252,7 @@ function hsl(h, s, l) { return `hsl(${((h % 360) + 360) % 360},${s}%,${l}%)`; }
 function fmt(t) { const m = Math.floor(t / 60); return m + ':' + (t - m * 60).toFixed(1).padStart(4, '0'); }
 
 // ---------------------------------------------------------------- editing
-function snapshot() { history.push(JSON.stringify(edit)); if (history.length > 100) history.shift(); }
+function snapshot() { history.push(JSON.stringify(edit)); if (history.length > 100) history.shift(); shownBuild = null; }
 function changed(message) { dirty = true; updateButtons(); if (message) status(message); }
 function act(message, fn) { snapshot(); fn(); changed(message); }
 function status(text, bad) { $('status').textContent = text || ''; $('status').className = bad ? 'bad' : ''; }
@@ -509,6 +536,116 @@ $('notes').onpointerup = e => {
   showNotesInfo();
 };
 
+// ---------------------------------------------------------------- build-ups
+// A drop's build-up fires pulses at set speeds: 'stages' are [beats before the drop, pulses per beat], each
+// holding until the next; 'smooth' speeds up gradually between them. Without stages: 1 a beat, 2 from
+// halfway, 4 for the last fifth. firings() matches buildFirings in strips.py, so the ticks shown here are
+// exactly where the strips fire.
+const RATES = {0.25: 'once a bar', 0.5: 'every other beat', 1: '1 per beat', 2: '2 per beat (8ths)', 3: '3 per beat (triplets)',
+  4: '4 per beat (16ths)', 6: '6 per beat', 8: '8 per beat (32nds)'};
+function beatIndexAt(t) { const b = edit.beats; const i = Math.max(0, Math.min(b.length - 2, firstAfter(t) - 1)); return i + (t - b[i]) / (b[i + 1] - b[i]); }
+function timeAtBeat(x) { const b = edit.beats; const i = Math.max(0, Math.min(b.length - 2, Math.floor(x))); return b[i] + (x - i) * (b[i + 1] - b[i]); }
+// Build-ups count back from the beat nearest the drop, so the pulses stay on the beat (as in strips.py)
+function dropBeat(d) { return Math.round(beatIndexAt(d.time)); }
+function buildBeats(d) { return Math.max(0, dropBeat(d) - beatIndexAt(d.buildStart)); }
+function autoStages(d) { const B = buildBeats(d); return [[B, 1], [0.5 * B, 2], [0.2 * B, 4]]; }
+function stagesOf(d) { return d.stages && d.stages.length ? d.stages : autoStages(d); }
+function firings(d) {
+  const total = buildBeats(d);
+  const st = stagesOf(d).map(([b, r]) => [Math.min(+b, total), +r]).filter(([b, r]) => b > 0 && r > 0).sort((x, y) => y[0] - x[0]);
+  const out = [];
+  st.forEach(([b, r], i) => {
+    const end = i + 1 < st.length ? st[i + 1][0] : 0;
+    if (d.smooth && i + 1 < st.length) {
+      const r2 = st[i + 1][1], seg = b - end, n = Math.max(2, Math.floor(seg * 128) + 1);
+      const us = Array.from({length: n}, (_, j) => b + (end - b) * j / (n - 1)), phase = [0];
+      for (let j = 0; j + 1 < n; j++) phase.push(phase[j] + r * Math.pow(r2 / r, (b - (us[j] + us[j + 1]) / 2) / seg) * (us[j] - us[j + 1]));
+      const k = Math.max(1, Math.round(phase[n - 1])), scale = k / phase[n - 1];
+      let j = 0;
+      for (let m = 0; m < k; m++) { while (j < n - 1 && phase[j] * scale < m - 1e-9) j++; out.push(us[j]); }
+    } else {
+      for (let m = Math.floor(b * r + 1e-9); m >= 1 && m / r > end + 1e-9; m--) out.push(m / r);
+    }
+  });
+  return out.sort((x, y) => x - y);
+}
+// Every build-up pulse in the song, as times (s); worked out again only when the drops or the grid change
+let pulseCache = {key: null, list: []};
+function buildPulses() {
+  const b = edit.beats, key = JSON.stringify(edit.drops) + b.length + ',' + b[0] + ',' + b[b.length - 1];
+  if (pulseCache.key !== key) {
+    const list = [];
+    for (const d of edit.drops) {
+      if (d.buildStart >= d.time) continue;
+      const di = dropBeat(d);
+      for (const u of firings(d)) list.push(timeAtBeat(di - u));
+    }
+    pulseCache = {key, list: list.sort((x, y) => x - y)};
+  }
+  return pulseCache.list;
+}
+// The drop the panel is about: the one whose build-up the playhead is in, else the next one, else the last
+function buildDropIndex() {
+  const t = position(), d = edit.drops;
+  let i = d.findIndex(x => x.buildStart <= t && t < x.time);
+  if (i < 0) i = d.findIndex(x => x.time > t);
+  if (i < 0) i = d.length - 1;
+  return i;
+}
+const bars = beats => String(+(beats / 4).toFixed(2));
+let shownBuild = null;
+function showBuild() {
+  if (!edit) return;
+  const i = buildDropIndex(), d = edit.drops[i], key = i + JSON.stringify(d || null) + edit.beats.length;
+  if (key === shownBuild) return;
+  shownBuild = key;
+  const controls = ['buildBars', 'buildStyle', 'buildAdd', 'buildAuto'];
+  if (!d) {
+    $('buildInfo').textContent = '(this song has no drops: mark one with D)';
+    $('buildStages').innerHTML = '';
+    controls.forEach(id => $(id).disabled = true);
+    return;
+  }
+  controls.forEach(id => $(id).disabled = false);
+  const total = buildBeats(d);
+  $('buildInfo').textContent = `(into the drop at ${fmt(d.time)}` + (total > 0 ? `, ${bars(total)} bars` : ', none') + (d.stages ? ')' : '; automatic speeds)');
+  $('buildBars').value = total > 0 ? bars(total) : '';
+  $('buildStyle').value = d.smooth ? 'smooth' : '';
+  const box = $('buildStages');
+  box.innerHTML = '';
+  const st = stagesOf(d).slice().sort((x, y) => y[0] - x[0]);
+  st.forEach(([b, r], k) => {
+    const row = document.createElement('div'); row.className = 'row';
+    const at = document.createElement('input'); at.type = 'number'; at.min = '0.25'; at.step = '0.25'; at.style.width = '72px'; at.value = bars(b);
+    const rate = document.createElement('select');
+    for (const [v, text] of Object.entries(RATES)) { const o = document.createElement('option'); o.value = v; o.textContent = text; rate.appendChild(o); }
+    if (!RATES[r]) { const o = document.createElement('option'); o.value = r; o.textContent = r + ' per beat'; rate.appendChild(o); }
+    rate.value = String(r);
+    row.append(k === 0 ? 'From ' : 'Then from ', at, ' bars before the drop: ', rate);
+    if (st.length > 1) { const x = document.createElement('button'); x.textContent = '×'; x.title = 'Remove this speed change'; x.onclick = () => editStages(i, s => s.splice(k, 1), 'Speed change removed'); row.append(x); }
+    at.onchange = () => { const v = +at.value; if (v > 0) editStages(i, s => { s[k][0] = v * 4; }, 'Speed change moved to ' + bars(v * 4) + ' bars before the drop'); };
+    rate.onchange = () => editStages(i, s => { s[k][1] = +rate.value; }, 'Build-up speed: ' + (RATES[rate.value] || rate.value + ' per beat'));
+    box.appendChild(row);
+  });
+}
+// Changes to a drop's speeds turn its automatic speeds into explicit ones first
+function editStages(i, fn, message) {
+  act(message, () => {
+    const d = edit.drops[i];
+    const st = stagesOf(d).map(([b, r]) => [Math.round(b), r]).sort((x, y) => y[0] - x[0]);
+    fn(st);
+    d.stages = st.filter(([b, r]) => b > 0 && r > 0).sort((x, y) => y[0] - x[0]);
+  });
+}
+$('buildBars').onchange = () => {
+  const i = buildDropIndex(), v = +$('buildBars').value;
+  if (!(v > 0)) return;
+  act('Build-up now starts ' + bars(v * 4) + ' bars before the drop', () => { const d = edit.drops[i]; d.buildStart = Math.max(0, timeAtBeat(dropBeat(d) - v * 4)); });
+};
+$('buildStyle').onchange = () => { const i = buildDropIndex(); act(null, () => { if ($('buildStyle').value) edit.drops[i].smooth = true; else delete edit.drops[i].smooth; }); };
+$('buildAdd').onclick = () => editStages(buildDropIndex(), s => { const last = s[s.length - 1]; s.push([Math.max(1, Math.round(last[0] / 2)), Math.min(8, last[1] * 2)]); }, 'Speed change added');
+$('buildAuto').onclick = () => { const i = buildDropIndex(); act('Build-up back to automatic speeds', () => { delete edit.drops[i].stages; delete edit.drops[i].smooth; }); };
+
 // ---------------------------------------------------------------- section panel
 function fillSelect(el, options) { el.innerHTML = ''; for (const [v, text] of Object.entries(options)) { const o = document.createElement('option'); o.value = v; o.textContent = text; el.appendChild(o); } }
 fillSelect($('secPattern'), PATTERNS);
@@ -569,7 +706,7 @@ function draw() {
   if (!song || !edit) return;
   const pos = position(), dur = duration();
   $('time').textContent = fmt(pos) + ' / ' + fmt(dur);
-  showSection();
+  showSection(); showBuild();
 
   // Whole song
   let [g, w, h, r] = sizeCanvas($('overview'));
@@ -592,6 +729,19 @@ function draw() {
     g.fillStyle = one ? 'rgba(255,255,255,.9)' : 'rgba(255,255,255,.28)';
     g.fillRect(X(b[i]) - (one ? r : 0), 14 * r, one ? 2 * r : r, h - 14 * r);
     if (one) { g.font = `${10 * r}px system-ui`; g.fillText(String(Math.floor((i - edit.downbeat) / 4) + 1), X(b[i]) + 3 * r, 26 * r); }
+  }
+  // Build-up pulses: a tick where each one fires, the speed written where it changes
+  const pulses = buildPulses();
+  g.fillStyle = '#5fe0ff';
+  for (let k = firstNoteAfter(pulses.map(t => [t]), t0); k < pulses.length && pulses[k] <= t1; k++) g.fillRect(X(pulses[k]) - r / 2, h - 30 * r, Math.max(1, r), 16 * r);
+  for (const d of edit.drops) {
+    if (d.buildStart >= d.time || d.time < t0 || d.buildStart > t1) continue;
+    const di = dropBeat(d), total = buildBeats(d);
+    g.font = `${10 * r}px system-ui`;
+    for (const [b, rt] of stagesOf(d)) {
+      const t = timeAtBeat(di - Math.min(b, total));
+      if (t >= t0 && t <= t1) { g.fillStyle = '#5fe0ff'; g.fillRect(X(t), h - 44 * r, r, 30 * r); g.fillText((RATES[rt] || rt + ' per beat').replace(/ \(.*\)/, ''), X(t) + 3 * r, h - 34 * r); }
+    }
   }
   g.fillStyle = '#ffd34d';
   for (const t of taps) if (t > t0 && t < t1) { g.beginPath(); g.moveTo(X(t), h); g.lineTo(X(t) - 5 * r, h - 9 * r); g.lineTo(X(t) + 5 * r, h - 9 * r); g.fill(); }
@@ -616,7 +766,12 @@ function draw() {
   }
   let light = 10 + 45 * level, sat = 90;
   const build = edit.drops.find(d => d.buildStart <= pos && pos < d.time);
-  if (build) { const p = (pos - build.buildStart) / (build.time - build.buildStart); sat = 90 - 80 * p; light = 15 + 50 * p * level + 10 * p; }
+  if (build) {
+    const p = (pos - build.buildStart) / (build.time - build.buildStart), list = buildPulses();
+    let k = firstNoteAfter(list.map(t => [t]), pos + 1e-6) - 1;
+    const pulse = k >= 0 && list[k] >= build.buildStart ? Math.exp(-(pos - list[k]) * 14) : 0;
+    sat = 90 - 80 * p; light = 15 + 50 * p * pulse + 10 * p;
+  }
   const drop = edit.drops.find(d => pos >= d.time && pos - d.time < 0.35);
   if (s.pattern === 'off') light = 3;
   g.fillStyle = drop ? '#fff' : hsl(hue, sat, light);
@@ -647,7 +802,7 @@ async function loadSongs(keep) {
 }
 async function openSong(id) {
   if (dirty && !confirm('Discard unsaved changes to this song?')) { $('song').value = song.id; return; }
-  pause(); buffer = null; song = null; edit = null; taps = []; history = []; dirty = false; shownSection = null;
+  pause(); buffer = null; song = null; edit = null; taps = []; history = []; dirty = false; shownSection = null; shownBuild = null;
   status('Loading...');
   const r = await fetch('/api/song?id=' + id); song = await r.json();
   if (song.error && !song.beats) { status(song.error, true); return; }
@@ -687,7 +842,7 @@ async function pollLog() {
 $('song').onchange = () => openSong($('song').value);
 $('play').onclick = () => playing ? pause() : play(position());
 $('save').onclick = save;
-$('undo').onclick = () => { if (history.length) { edit = JSON.parse(history.pop()); shownSection = null; dirty = true; sel.clear(); showNotesInfo(); updateButtons(); status('Undone'); } };
+$('undo').onclick = () => { if (history.length) { edit = JSON.parse(history.pop()); shownSection = null; shownBuild = null; dirty = true; sel.clear(); showNotesInfo(); updateButtons(); status('Undone'); } };
 $('notesDelete').onclick = deleteNotes; $('notesNone').onclick = selectNone;
 $('clickVol').oninput = () => { clickGain.gain.value = +$('clickVol').value; };
 $('zoomIn').onclick = () => { zoom = Math.max(2, zoom / 1.5); };

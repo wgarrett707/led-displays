@@ -66,6 +66,35 @@ def hsvArray(hue, sat, val):
     return np.stack([r, g, b], 1) + (val - c)[:, None]
 
 
+def buildFirings(d, total):
+    # When a drop's build-up fires its pulses, as beats before the drop (ascending). 'total' is the
+    # build-up's length in beats. The drop's 'stages' are [beats before the drop, pulses per beat]: each
+    # rate holds from that point until the next stage; without stages it's 1 a beat, then 2 from halfway,
+    # then 4 for the last fifth. Pulses fall on whole fractions of a beat counted back from the drop, so
+    # they lock to the beat. With 'smooth', each stage speeds up gradually into the next instead of
+    # jumping. The editor (editor.html, firings) works this out the same way to show the pulses.
+    stages = d.get('stages') or [[total, 1], [0.5 * total, 2], [0.2 * total, 4]]
+    st = sorted([(min(float(b), total), float(r)) for b, r in stages if min(float(b), total) > 0 and float(r) > 0], reverse=True)
+    out = []
+    for i, (b, r) in enumerate(st):
+        end = st[i + 1][0] if i + 1 < len(st) else 0.0
+        if d.get('smooth') and i + 1 < len(st):
+            r2, seg = st[i + 1][1], b - end
+            n = max(2, int(math.floor(seg * 128)) + 1)
+            us = b + (end - b) * np.arange(n) / (n - 1)
+            mids = (us[:-1] + us[1:]) / 2
+            phase = np.concatenate([[0.0], np.cumsum(r * (r2 / r) ** ((b - mids) / seg) * (us[:-1] - us[1:]))])
+            k = max(1, int(round(phase[-1])))
+            phase *= k / phase[-1]
+            out += list(us[np.minimum(np.searchsorted(phase, np.arange(k) - 1e-9), n - 1)])
+        else:
+            m = int(math.floor(b * r + 1e-9))
+            while m >= 1 and m / r > end + 1e-9:
+                out.append(m / r)
+                m -= 1
+    return np.array(sorted(out))
+
+
 class Strips(threading.Thread):
     def __init__(self, clock):
         threading.Thread.__init__(self, daemon=True)
@@ -175,19 +204,32 @@ class Strips(threading.Thread):
     # ------------------------------------------------------------ patterns (chosen per section in the editor)
 
     def buildUp(self, out, st, hues, level):
-        # Pulses rush in from the far ends, faster and whiter as the drop gets close
+        # Pulses rush in from the far ends, faster and whiter as the drop gets close. How fast they fire
+        # comes from the drop's build-up speeds (set in the editor), see buildFirings.
         p = st.build
         speed = LONGEST / CROSS_BEATS
         out += rgb(hues[0], 0.9, 0.04 + 0.10 * st.energy)
-        sub = 1 if p < 0.5 else 2 if p < 0.8 else 4
-        count = st.beat * sub
-        for k in range(int(math.floor(count)) - 6 * sub, int(math.floor(count)) + 1):
-            age = (count - k) / sub
-            pos = LONGEST - age * speed * 1.4
-            if pos < -20:
-                continue
-            self.pulse(out, pos, rgb(hues[0] + 40 * p, 1.0 - 0.8 * p, 0.4 + 0.6 * p) * level, width=3.0, tail=12.0, inward=True)
+        a = self.clock.analysis
+        if a is not None and st.buildDrop is not None:
+            fire = self.firings(st.buildDrop, a)
+            u = st.beatsToDrop
+            reach = LONGEST / (speed * 1.4) + 0.3        # beats a pulse takes to cross the strip
+            for f in fire[np.searchsorted(fire, u):np.searchsorted(fire, u + reach)]:
+                pos = LONGEST - (f - u) * speed * 1.4
+                if pos < -20:
+                    continue
+                self.pulse(out, pos, rgb(hues[0] + 40 * p, 1.0 - 0.8 * p, 0.4 + 0.6 * p) * level, width=3.0, tail=12.0, inward=True)
         out += (p ** 2 * 0.3) * (self.d / LONGEST)[:, None] * rgb(0, 0, 1)
+
+    def firings(self, d, a):
+        key = (d['time'], d['buildStart'], repr(d.get('stages')), bool(d.get('smooth')), len(a.beats), float(a.beats[0]))
+        cache = getattr(self, '_firings', {})
+        if key not in cache:
+            if len(cache) > 32:
+                cache.clear()
+            cache[key] = buildFirings(d, round(a.beatAt(d['time'])) - a.beatAt(d['buildStart']))
+            self._firings = cache
+        return cache[key]
 
     def draw_pulses(self, out, st, hues, level):
         # Beats leave the matrix as pulses; each coloured by the melody note on that beat

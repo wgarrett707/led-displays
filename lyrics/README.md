@@ -97,7 +97,12 @@ The lights follow each song's real beat instead of assuming 120 BPM.
   taps" fits a steady tempo to the taps and lines it up exactly with the audio for the whole song (taps
   alone drift 50-300 ms by the end); H moves the grid half a beat (clicks between the beats), G refits a
   steady grid from the audio; nudge it 10 ms at a time; tempo x2 / /2; set bar 1 (B), drops (D), build-up starts (U), lifts (L) and
-  sections (S); per section: label, chorus, strip pattern (chart notes, pulses, breathe, chase, sparkle,
+  sections (S); per drop, its build-up (Build-up panel): where it starts (bars before the drop), the speed the
+  pulses fire at (speed changes "from N bars before the drop: R per beat", once a bar up to 8 per beat), in
+  steps or speeding up smoothly; cyan ticks under the waveform show exactly where each pulse fires
+  (`strips.buildFirings`, matched by `firings` in the page) and they can be clicked along with the song.
+  Without settings: 1 a beat, 2 from halfway, 4 for the last fifth. Pulses count back from the beat
+  nearest the drop, so they stay on the beat; per section: label, chorus, strip pattern (chart notes, pulses, breathe, chase, sparkle,
   rainbow, solid, strobe, off) and colours. The strip preview follows the chart's notes when there is one. Save sends it to the Pi, which reloads it within seconds;
   hand-edited songs are never overwritten by the automatic analysis.
 - **`beatsync.py`**: the beat clock. Song time = Spotify's position + an offset, measured by matching the

@@ -101,8 +101,16 @@ def save(trackId, edit):
             if not s.get(key):
                 s.pop(key, None)
     r['sections'] = sections
-    r['drops'] = sorted([{'time': round(float(d['time']), 3), 'strength': float(d.get('strength', 10)),
-                          'buildStart': round(float(d['buildStart']), 3)} for d in edit['drops']], key=lambda d: d['time'])
+    def drop(d):
+        out = {'time': round(float(d['time']), 3), 'strength': float(d.get('strength', 10)),
+               'buildStart': round(float(d['buildStart']), 3)}
+        # Build-up speeds from the editor: [beats before the drop, pulses per beat], and whether it speeds up smoothly
+        if d.get('stages'):
+            out['stages'] = sorted([[round(float(b), 3), float(rate)] for b, rate in d['stages']], reverse=True)
+        if d.get('smooth'):
+            out['smooth'] = True
+        return out
+    r['drops'] = sorted([drop(d) for d in edit['drops']], key=lambda d: d['time'])
     r['lifts'] = sorted([{'time': round(float(d['time']), 3), 'strength': float(d.get('strength', 5)),
                           'buildStart': round(float(d.get('buildStart', d['time'])), 3)} for d in edit['lifts']],
                         key=lambda d: d['time'])

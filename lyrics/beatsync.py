@@ -113,9 +113,14 @@ class BeatState:
         self.section = a.sections[s]
         self.sectionIndex = s
         self.sinceDrop = self.dropStrength = self.build = None
+        # During a build-up: its drop (with any speeds set in the editor) and how many beats are left
+        self.buildDrop = self.beatsToDrop = None
         for d in a.drops:
             if d['buildStart'] <= t < d['time']:
                 self.build = (t - d['buildStart']) / max(0.1, d['time'] - d['buildStart'])
+                # counted from the beat nearest the drop, so the pulses stay on the beat even if the
+                # drop mark is a little off the grid
+                self.buildDrop, self.beatsToDrop = d, round(a.beatAt(d['time'])) - index
             elif t >= d['time']:
                 self.sinceDrop, self.dropStrength = t - d['time'], d['strength']
         self.sinceLift = None
