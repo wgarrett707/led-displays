@@ -114,7 +114,10 @@
       </div>
     </div>
     <div class="box" id="buildBox">
-      <h3>Build-up <span id="buildInfo" class="dim" style="text-transform:none"></span></h3>
+      <h3>Drop and build-up <span id="buildInfo" class="dim" style="text-transform:none"></span></h3>
+      <div class="row" style="margin-bottom:8px">
+        <label>The drop hits with <select id="dropStyle"><option value="">a white hit, then a short strobe</option><option value="flash">one white flash</option></select></label>
+      </div>
       <div class="row">
         <label>Starts <input type="number" id="buildBars" min="0.25" step="0.25" style="width:72px"> bars before the drop</label>
         <label>Speeds up <select id="buildStyle"><option value="">in steps</option><option value="smooth">smoothly</option></select></label>
@@ -156,7 +159,7 @@
     <div><kbd>F</kbd> fade out from here &middot; <kbd>O</kbd> balls fill up from here</div>
     <div><kbd>X</kbd> delete the nearest mark &middot; <kbd>Delete</kbd> delete the selected chart notes</div>
     <div><kbd>Ctrl</kbd>+<kbd>Z</kbd> undo &middot; click the waveform to jump</div>
-    <div>Drops: a white hit, then a short strobe on the beat. Lifts: one big wave of colour.</div>
+    <div>Drops: a white hit, then a short strobe on the beat (or just one white flash: set it in the drop panel). Lifts: one big wave of colour.</div>
     <div>Fade out: the strips fade to black over its length and stay dark. Balls: balls bounce and collide, more on every beat, until they fill the strips.</div>
     <div>Build-ups: pulses rush in from the far ends at the speeds in the Build-up panel; the cyan ticks under the waveform are where each pulse fires.</div>
     <div>Click track: high click on bar 1, low clicks on the other beats.</div>
@@ -663,7 +666,7 @@ function showBuild() {
   const i = buildDropIndex(), d = edit.drops[i], key = i + JSON.stringify(d || null) + edit.beats.length;
   if (key === shownBuild) return;
   shownBuild = key;
-  const controls = ['buildBars', 'buildStyle', 'buildAdd', 'buildAuto'];
+  const controls = ['buildBars', 'buildStyle', 'buildAdd', 'buildAuto', 'dropStyle'];
   if (!d) {
     $('buildInfo').textContent = '(this song has no drops: mark one with D)';
     $('buildStages').innerHTML = '';
@@ -671,6 +674,7 @@ function showBuild() {
     return;
   }
   controls.forEach(id => $(id).disabled = false);
+  $('dropStyle').value = d.style === 'flash' ? 'flash' : '';
   const total = buildBeats(d);
   $('buildBars').value = total > 0 ? bars(total) : '';
   $('buildStyle').value = d.smooth ? 'smooth' : '';
@@ -711,6 +715,12 @@ $('buildBars').onchange = () => {
   const i = buildDropIndex(), v = +$('buildBars').value;
   if (!(v > 0)) return;
   act('Build-up now starts ' + bars(v * 4) + ' bars before the drop', () => { const d = edit.drops[i]; d.buildStart = Math.max(0, timeAtBeat(dropBeat(d) - v * 4)); });
+};
+$('dropStyle').onchange = () => {
+  const i = buildDropIndex(), flash = $('dropStyle').value === 'flash';
+  act('The drop at ' + fmt(edit.drops[i].time) + (flash ? ' hits with one white flash' : ' hits with a white hit and a short strobe'), () => {
+    if (flash) edit.drops[i].style = 'flash'; else delete edit.drops[i].style;
+  });
 };
 $('buildStyle').onchange = () => { const i = buildDropIndex(); act(null, () => { if ($('buildStyle').value) edit.drops[i].smooth = true; else delete edit.drops[i].smooth; }); };
 $('buildAdd').onclick = () => editStages(buildDropIndex(), s => { const last = s[s.length - 1]; s.push([Math.max(1, Math.round(last[0] / 2)), Math.min(8, last[1] * 2)]); }, 'Speed change added');
@@ -856,7 +866,11 @@ function draw() {
     const pulse = k >= 0 && list[k] >= build.buildStart ? Math.exp(-(pos - list[k]) * 14) : 0;
     sat = 90 - 80 * p; light = 15 + 50 * p * pulse + 10 * p;
   }
-  const drop = edit.drops.find(d => pos >= d.time && pos - d.time < 0.35);
+  // Drops: the white hit; a strobe drop also flashes on the beat for 2 bars, like strips.py (every other
+  // beat in fast songs, never over 3 flashes a second)
+  const strobing = d => { const bt = (pos - d.time) / period(), every = 1 / period() > 3 ? 2 : 1;
+                          return d.style !== 'flash' && bt < 8 && Math.floor(bt) % every === 0 && (bt % 1) * period() < 0.05; };
+  const drop = edit.drops.find(d => pos >= d.time && (pos - d.time < 0.35 || strobing(d)));
   const balls = (edit.effects || []).find(e => e.type === 'balls' && e.time <= pos && pos < e.end);
   if (balls) { const p = (pos - balls.time) / (balls.end - balls.time); light = 12 + 45 * p; sat = 85; hue = ha + (hb - ha) * ((pos * 1.7) % 1); }
   if (s.pattern === 'off') light = 3;

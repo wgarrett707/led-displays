@@ -107,7 +107,8 @@ The lights follow each song's real beat instead of assuming 120 BPM.
   steps or speeding up smoothly; cyan ticks under the waveform show exactly where each pulse fires
   (`strips.buildFirings`, matched by `firings` in the page) and they can be clicked along with the song.
   Without settings: 1 a beat, 2 from halfway, 4 for the last fifth. Pulses count back from the beat
-  nearest the drop, so they stay on the beat. Strip effects at a mark (Strip effects panel, keys F and
+  nearest the drop, so they stay on the beat. Each drop hits with a white hit then a short strobe (default)
+  or just one white flash (`style: 'flash'`, set in the same panel). Strip effects at a mark (Strip effects panel, keys F and
   O; `effects` in the analysis, each {type, time, end}): a fade-out (the strips fade to black over its
   length, to the end of the song unless shortened, then stay dark, drops included) and 'balls' (balls
   bounce and collide, flashing white when they hit, a new one dropping into the biggest gap on the beat

@@ -116,6 +116,7 @@ class BeatState:
         self.section = a.sections[s]
         self.sectionIndex = s
         self.sinceDrop = self.dropStrength = self.build = None
+        self.lastDrop = None      # the drop sinceDrop counts from (its 'style' from the editor)
         # During a build-up: its drop (with any speeds set in the editor) and how many beats are left
         self.buildDrop = self.beatsToDrop = None
         for d in a.drops:
@@ -125,7 +126,7 @@ class BeatState:
                 # drop mark is a little off the grid
                 self.buildDrop, self.beatsToDrop = d, round(a.beatAt(d['time'])) - index
             elif t >= d['time']:
-                self.sinceDrop, self.dropStrength = t - d['time'], d['strength']
+                self.sinceDrop, self.dropStrength, self.lastDrop = t - d['time'], d['strength'], d
         # Marked effects: how far a fade-out has got (1 = none, 0 = dark) and the 'balls' effect running now
         self.fade, self.balls = 1.0, None
         for e in a.effects:

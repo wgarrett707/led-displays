@@ -23,7 +23,8 @@ STRIPS = [(0, 224, 207), (224, 224, 205)]
 LONGEST = max(lit for s, n, lit in STRIPS)
 # Pulses cross the longest strip in this many beats
 CROSS_BEATS = 1.25
-# After a drop: a white hit, then a strobe on the beat for this many bars (0 = no strobe).
+# After a drop: a white hit, then a strobe on the beat for this many bars (0 = no strobe). A drop set to
+# 'One white flash' in the editor (style 'flash') gets just the white hit.
 # Never faster than MAX_FLASHES a second (every other beat for fast songs).
 DROP_STROBE_BARS = 2
 MAX_FLASHES = 3.0
@@ -261,7 +262,7 @@ class Strips(threading.Thread):
         if st.sinceDrop is not None:
             beatsSince = st.sinceDrop / st.period
             out += math.exp(-st.sinceDrop / 0.3) * 1.2   # white hit
-            if beatsSince < 4 * DROP_STROBE_BARS:
+            if beatsSince < 4 * DROP_STROBE_BARS and (st.lastDrop or {}).get('style') != 'flash':
                 every = 1 if 1.0 / st.period <= MAX_FLASHES else 2
                 if int(math.floor(beatsSince)) % every == 0 and (beatsSince % 1.0) * st.period < FLASH_ON:
                     out = np.maximum(out, 0.9)

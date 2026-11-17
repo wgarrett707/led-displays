@@ -109,6 +109,9 @@ def save(trackId, edit):
             out['stages'] = sorted([[round(float(b), 3), float(rate)] for b, rate in d['stages']], reverse=True)
         if d.get('smooth'):
             out['smooth'] = True
+        # How the drop hits: 'flash' = one white flash; otherwise a white hit, then a short strobe
+        if d.get('style') == 'flash':
+            out['style'] = 'flash'
         return out
     r['drops'] = sorted([drop(d) for d in edit['drops']], key=lambda d: d['time'])
     r['lifts'] = sorted([{'time': round(float(d['time']), 3), 'strength': float(d.get('strength', 5)),
