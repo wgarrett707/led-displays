@@ -114,7 +114,12 @@ The lights follow each song's real beat instead of assuming 120 BPM.
   length, to the end of the song unless shortened, then stay dark, drops included) and 'balls' (balls
   bounce and collide, flashing white when they hit, a new one dropping into the biggest gap on the beat
   until they fill the strips by its end; `strips.Balls`, simulated in fixed steps from the effect's start
-  so it always plays the same; by default it runs to the next drop if one is within 32 bars). Per
+  so it always plays the same; by default it runs to the next drop if one is within 32 bars), and two other
+  ways of showing the chart's notes while the mark runs (keys P and C, by default to the end of the
+  section): 'notepulse' (the whole strip glows and swells on each note; fast runs blend into a shimmer)
+  and 'notecolor' (the whole strip one colour, switching on each note: a colour per fret, 72 degrees
+  apart from the section's first colour, open notes white; 60 ms crossfade). Drums-only charts follow
+  the kicks and snares. Per
   section: label, chorus, strip pattern (chart notes, pulses, breathe, chase, sparkle,
   rainbow, solid, strobe, off) and colours. The strip preview follows the chart's notes when there is one. Save sends it to the Pi, which reloads it within seconds;
   hand-edited songs are never overwritten by the automatic analysis.

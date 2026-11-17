@@ -128,10 +128,11 @@ def save(trackId, edit):
             r['chart'][chart['part']] = sorted(lead)
             r['chart']['drums'] = sorted(drums)
             r['chartEdited'] = True
-    # Strip effects marked in the editor: fade-outs and 'balls', each from 'time' to 'end'
+    # Strip effects marked in the editor: fade-outs, 'balls', and the two other ways of showing chart notes
+    # ('notepulse', 'notecolor'), each from 'time' to 'end'
     r['effects'] = sorted([{'type': e['type'], 'time': round(float(e['time']), 3), 'end': round(float(e['end']), 3)}
                            for e in edit.get('effects') or []
-                           if e.get('type') in ('fadeout', 'balls') and float(e['end']) > float(e['time'])],
+                           if e.get('type') in ('fadeout', 'balls', 'notepulse', 'notecolor') and float(e['end']) > float(e['time'])],
                           key=lambda e: e['time'])
     r['edited'] = True
     r['editedAt'] = time.strftime('%Y-%m-%d %H:%M')

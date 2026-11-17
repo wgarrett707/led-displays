@@ -264,6 +264,10 @@ class Strips(threading.Thread):
             # A 'balls' effect marked in the editor takes over from the pattern while it runs
             self.drawBalls(out, st, hues, level)
             pattern = 'balls'
+        elif st.noteStyle is not None and a is not None and a.hasNotes:
+            # So does another way of showing the chart's notes, marked in the editor
+            self.drawNoteStyle(out, st, hues, level)
+            pattern = st.noteStyle
         elif st.build is not None and pattern != 'off':
             self.buildUp(out, st, hues, level)
         else:
@@ -292,6 +296,52 @@ class Strips(threading.Thread):
             # A fade-out marked in the editor: everything fades to black (and stays dark)
             out = out * st.fade
         return out
+
+    def noteHits(self, a):
+        # The notes the 'notepulse' and 'notecolor' marks follow: the chart's melody, or for a drums-only
+        # chart its (accented) kicks and snares
+        if len(a.lead):
+            return a.lead
+        hits = getattr(self, '_hits', None)
+        if hits is None or hits[0] is not a:
+            keep = a.drumAccent & (a.drumLanes <= 1)
+            arr = np.zeros((int(keep.sum()), 3))
+            arr[:, 0], arr[:, 1] = a.drumTimes[keep], a.drumLanes[keep]
+            hits = (a, arr)
+            self._hits = hits
+        return hits[1]
+
+    def drawNoteStyle(self, out, st, hues, level):
+        # 'notepulse': the whole strip glows in the section's colours and swells on each note (a held note
+        # holds it up); fast runs blend into a shimmer rather than flashing. 'notecolor': the whole strip is
+        # one colour and changes on each note: each fret its own colour, spread round the colour wheel from
+        # the section's first colour (open notes white), crossfading in 60 ms.
+        notes = self.noteHits(self.clock.analysis)
+        t = st.time
+        i1 = int(np.searchsorted(notes[:, 0], t, 'right'))
+        if st.noteStyle == 'notepulse':
+            swell = 0.0
+            for t0, lane, held in notes[max(0, i1 - 16):i1]:
+                age = t - t0
+                swell = max(swell, 0.7 if age < held else math.exp(-(age - held) / 0.25))
+            lane = notes[i1 - 1, 1] if i1 else 0
+            hue = hues[0] + (hues[1] - hues[0]) * max(0.0, lane) / 4.0
+            mix = (self.d / LONGEST)[:, None]
+            glow = (1 - mix) * rgb(hue, 0.85, 1.0) + mix * rgb(hues[1], 0.85, 1.0)
+            out += glow * (level * (0.2 + 0.55 * swell))
+            return
+
+        def color(lane):
+            return rgb(0, 0.0, 0.9) if lane < 0 else rgb(hues[0] + 72 * lane, 0.9, 1.0)
+        if i1 == 0:
+            c, accent = rgb(hues[0], 0.85, 1.0), 0.0
+        else:
+            age = t - notes[i1 - 1, 0]
+            k = min(1.0, age / 0.06)
+            prev = color(notes[i1 - 2, 1]) if i1 >= 2 else rgb(hues[0], 0.85, 1.0)
+            c = prev * (1 - k) + color(notes[i1 - 1, 1]) * k
+            accent = 0.15 * math.exp(-age / 0.15)
+        out += c * (level * (0.6 + accent))
 
     def drawBalls(self, out, st, hues, level):
         # The 'balls' effect: see Balls. Each ball has its own colour from the section's range and flashes
