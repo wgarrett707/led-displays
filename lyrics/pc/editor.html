@@ -82,6 +82,9 @@
         <button id="steady" title="G">Steady grid from the audio</button>
         <span id="tempo" class="dim"></span>
       </div>
+      <div class="row" style="margin-top:8px">
+        <label class="row" title="When the grid moves, drops, build-ups, lifts, sections and strip effects move with the beat they sit on"><input type="checkbox" id="marksFollow" checked> Marks move with the grid</label>
+      </div>
     </div>
     <div class="box">
       <h3>Tap along <span class="dim" style="text-transform:none">(press <kbd>T</kbd> on every beat while it plays)</span></h3>
@@ -160,7 +163,7 @@
     <div><kbd>&larr;</kbd> <kbd>&rarr;</kbd> back / forward 2 s (<kbd>Shift</kbd>: 10 s)</div>
     <div><kbd>T</kbd> tap on the beat</div>
     <div><kbd>[</kbd> <kbd>]</kbd> grid 10 ms earlier / later (<kbd>Shift</kbd>: 1 ms)</div>
-    <div><kbd>B</kbd> the nearest beat is bar 1 &middot; <kbd>H</kbd> half a beat &middot; <kbd>G</kbd> steady grid from the audio</div>
+    <div><kbd>B</kbd> the nearest beat is bar 1 &middot; <kbd>H</kbd> half a beat &middot; <kbd>G</kbd> steady grid from the audio (marks move with the grid unless that box is unticked)</div>
     <div><kbd>D</kbd> drop, <kbd>U</kbd> build-up start, <kbd>L</kbd> lift, <kbd>S</kbd> new section</div>
     <div><kbd>F</kbd> fade out from here &middot; <kbd>O</kbd> balls fill up from here</div>
     <div><kbd>P</kbd> strip pulses on each chart note &middot; <kbd>C</kbd> colour changes on each chart note (to the end of the section)</div>
@@ -278,10 +281,56 @@ function fmt(t) { const m = Math.floor(t / 60); return m + ':' + (t - m * 60).to
 // ---------------------------------------------------------------- editing
 function snapshot() { history.push(JSON.stringify(edit)); if (history.length > 100) history.shift(); shownBuild = null; shownFx = null; }
 function changed(message) { dirty = true; updateButtons(); if (message) status(message); }
-function act(message, fn) { snapshot(); fn(); changed(message); }
+function act(message, fn) {
+  snapshot();
+  const before = edit.beats;
+  fn();
+  if (edit.beats !== before && $('marksFollow').checked) {
+    const n = moveMarks(before, edit.beats, gridDelta);
+    if (n) message = (message ? message + '; ' : 'Grid moved; ') + n + ' mark' + (n > 1 ? 's' : '') + ' moved with it';
+  }
+  gridDelta = null;
+  changed(message);
+}
+// Marks follow the beat grid. Each mark goes with the old beat nearest it, to wherever that beat is in the
+// new grid (gridDelta: the whole grid moved by exactly this much, as with the nudges and half a beat). A beat
+// with no counterpart within 0.45 of a beat in the new grid (tempo halved, or a new grid almost exactly half
+// a beat off, where it's unclear which way to go) leaves its marks where they are. A fade-out to the end of
+// the song keeps ending there. Returns how many marks moved.
+let gridDelta = null;
+function moveMarks(oldB, newB, delta) {
+  const d = []; for (let i = 1; i < newB.length; i++) d.push(newB[i] - newB[i - 1]); d.sort((x, y) => x - y);
+  const per = d[d.length >> 1] || 0.5;
+  const nearest = (list, t) => { let lo = 0, hi = list.length; while (lo < hi) { const m = (lo + hi) >> 1; if (list[m] < t) lo = m + 1; else hi = m; }
+                                 if (lo <= 0) return 0; if (lo >= list.length) return list.length - 1; return t - list[lo - 1] <= list[lo] - t ? lo - 1 : lo; };
+  const offset = t => {
+    if (delta !== null && delta !== undefined) return delta;
+    const ob = oldB[nearest(oldB, t)], o = newB[nearest(newB, ob)] - ob;
+    return Math.abs(o) < 0.45 * per ? o : 0;
+  };
+  const end = duration();
+  let moved = 0;
+  const move = (obj, keys) => {
+    let any = false;
+    for (const k of keys) {
+      const t = obj[k];
+      if (k === 'end' && obj.type === 'fadeout' && t >= end - 0.05) continue;
+      const n = Math.max(0, Math.min(end, t + offset(t)));
+      if (Math.abs(n - t) > 0.0005) { obj[k] = n; any = true; }
+    }
+    if (any) moved++;
+  };
+  edit.drops.forEach(x => move(x, ['time', 'buildStart']));
+  edit.lifts.forEach(x => move(x, ['time', 'buildStart']));
+  edit.sections.forEach(x => move(x, ['start']));
+  (edit.effects || []).forEach(x => move(x, ['time', 'end']));
+  edit.drops.sort((a, b) => a.time - b.time); edit.lifts.sort((a, b) => a.time - b.time);
+  edit.sections.sort((a, b) => a.start - b.start); (edit.effects || []).sort((a, b) => a.time - b.time);
+  return moved;
+}
 function status(text, bad) { $('status').textContent = text || ''; $('status').className = bad ? 'bad' : ''; }
 
-function shiftGrid(s) { act(null, () => { edit.beats = edit.beats.map(b => b + s); edit.shift += s; }); }
+function shiftGrid(s) { gridDelta = s; act(null, () => { edit.beats = edit.beats.map(b => b + s); edit.shift += s; }); }
 function setBar1() { const i = nearestBeat(position()); act('Bar 1 set at ' + fmt(edit.beats[i]), () => { edit.downbeat = ((i % 4) + 4) % 4; }); }
 function addDrop() {
   const i = nearestBar(position()), t = edit.beats[i];
@@ -425,6 +474,7 @@ async function steadyFromAudio() {
 }
 function halfBeat() {
   const half = period() / 2;
+  gridDelta = half;
   act('Grid moved half a beat (beats and off-beats swapped)', () => {
     edit.beats = edit.beats.map(b => b + half).filter(b => b <= duration());
     if (edit.beats[0] > half * 2) { edit.beats.unshift(edit.beats[0] - half * 2); edit.downbeat = (edit.downbeat + 1) % 4; }

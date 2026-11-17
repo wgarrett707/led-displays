@@ -101,7 +101,8 @@ The lights follow each song's real beat instead of assuming 120 BPM.
   a click track on the beat grid (high click on bar 1); tap along with T for ~20 s, then "New grid from my
   taps" fits a steady tempo to the taps and lines it up exactly with the audio for the whole song (taps
   alone drift 50-300 ms by the end); H moves the grid half a beat (clicks between the beats), G refits a
-  steady grid from the audio; nudge it 10 ms at a time; tempo x2 / /2; set bar 1 (B), drops (D), build-up starts (U), lifts (L) and
+  steady grid from the audio; nudge it 10 ms at a time (marks move with the grid: each with the beat it
+  sits on, unless 'Marks move with the grid' is unticked); tempo x2 / /2; set bar 1 (B), drops (D), build-up starts (U), lifts (L) and
   sections (S); per drop, its build-up (Build-up panel): where it starts (bars before the drop), the speed the
   pulses fire at (speed changes "from N bars before the drop: R per beat", once a bar up to 8 per beat), in
   steps or speeding up smoothly, or quiet (rate 0: the music cuts out, no pulses and the strips go dark until
