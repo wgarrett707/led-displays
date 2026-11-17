@@ -51,6 +51,10 @@
     <div class="row" style="margin-top:8px">
       <button id="notesDelete" disabled title="Delete">Delete selected notes</button>
       <button id="notesNone" disabled title="Esc">Select none</button>
+      <span style="flex:1"></span>
+      <button id="notesEarlier" title=", (comma)">&larr; Notes 10 ms earlier</button>
+      <button id="notesLater" title=". (full stop)">Notes 10 ms later &rarr;</button>
+      <span id="notesShift" class="dim"></span>
       <span class="dim">Click a note to select it, drag a box to select several (<kbd>Shift</kbd> adds to the selection), <kbd>Delete</kbd> removes them. Click empty space to jump there.</span>
     </div>
   </div>
@@ -170,6 +174,7 @@
     <div><kbd>F</kbd> fade out from here &middot; <kbd>O</kbd> balls fill up from here</div>
     <div><kbd>P</kbd> strip pulses on each chart note &middot; <kbd>C</kbd> colour changes on each chart note &middot; <kbd>Y</kbd> hype the chart notes (to the end of the section)</div>
     <div><kbd>X</kbd> delete the nearest mark &middot; <kbd>Delete</kbd> delete the selected chart notes</div>
+    <div><kbd>,</kbd> <kbd>.</kbd> the song's chart notes 10 ms earlier / later</div>
     <div><kbd>Ctrl</kbd>+<kbd>Z</kbd> undo &middot; click the waveform to jump</div>
     <div>Drops: one white flash (or a white hit then a strobe for as many bars as you set, in the drop panel; never over 3 flashes a second). Lifts: one big wave of colour.</div>
     <div>Fade out: the strips fade to black over its length and stay dark. Balls: balls bounce and collide, more on every beat, until they fill the strips.</div>
@@ -509,6 +514,8 @@ function showNotesInfo() {
   $('notesInfo').textContent = `(${c.lead.length} ${PART_NAMES[c.part] || 'melody'} notes, ${c.drums.length} drum hits` +
     (sel.size ? `; ${sel.size} selected)` : ')');
   $('notesDelete').disabled = $('notesNone').disabled = !sel.size;
+  const v = Math.round(noteShift() * 1000);
+  $('notesShift').textContent = v ? `Notes ${Math.abs(v)} ms ${v < 0 ? 'earlier' : 'later'}` : '';
 }
 function deleteNotes() {
   if (!sel.size) return;
@@ -520,11 +527,21 @@ function deleteNotes() {
   sel.clear(); showNotesInfo();
 }
 function selectNone() { sel.clear(); showNotesInfo(); }
+// The song's chart notes moved earlier / later as a whole ('nudge', s): for when they look a little early or
+// late against the music. Shown, previewed and played on the strips with it applied.
+function noteShift() { return (edit && edit.chart && edit.chart.nudge) || 0; }
+function nudgeNotes(ds) {
+  if (!edit || !edit.chart) return status('This song has no chart notes', true);
+  const v = Math.round((noteShift() + ds) * 1000) / 1000;
+  act(v ? 'Chart notes ' + Math.abs(Math.round(v * 1000)) + ' ms ' + (v < 0 ? 'earlier' : 'later') + ' than charted' : 'Chart notes back as charted',
+      () => { if (v) edit.chart.nudge = v; else delete edit.chart.nudge; });
+  showNotesInfo();
+}
 function drawNotes(t0, t1) {
   if (!edit.chart) return;
   const [g, w, h, r] = sizeCanvas($('notes'));
   g.clearRect(0, 0, w, h);
-  const X = t => (t - t0) / (t1 - t0) * w, rh = h / NOTE_ROWS;
+  const XB = t => (t - t0) / (t1 - t0) * w, ns = noteShift(), X = t => XB(t + ns), rh = h / NOTE_ROWS;
   // Lane backgrounds and names
   for (let row = 0; row < NOTE_ROWS; row++) {
     if (row === 5) continue;
@@ -535,9 +552,9 @@ function drawNotes(t0, t1) {
   const b = edit.beats;
   for (let i = Math.max(0, firstAfter(t0) - 1); i < b.length && b[i] <= t1; i++) {
     g.fillStyle = isBar(i) ? 'rgba(255,255,255,.35)' : 'rgba(255,255,255,.12)';
-    g.fillRect(X(b[i]), 0, isBar(i) ? 2 * r : r, h);
+    g.fillRect(XB(b[i]), 0, isBar(i) ? 2 * r : r, h);
   }
-  notesInView(t0, t1, (kind, i, n) => {
+  notesInView(t0 - ns, t1 - ns, (kind, i, n) => {
     const x = X(n[0]), on = sel.has(kind + i);
     if (kind === 'L') {
       const top = n[1] < 0 ? 0 : n[1] * rh, height = n[1] < 0 ? 5 * rh : rh;    // an open note: all five lanes
@@ -571,7 +588,7 @@ function drawNotes(t0, t1) {
 // Pointer: a click on a note selects it, a click elsewhere jumps there, a drag selects everything in the box
 function notesPoint(e) {
   const c = $('notes'), rc = c.getBoundingClientRect(), r = c.height / rc.height;
-  return {t: position() - zoom / 2 + (e.clientX - rc.left) / rc.width * zoom, y: (e.clientY - rc.top) * r, x: e.clientX, rh: c.height / NOTE_ROWS};
+  return {t: position() - zoom / 2 + (e.clientX - rc.left) / rc.width * zoom - noteShift(), y: (e.clientY - rc.top) * r, x: e.clientX, rh: c.height / NOTE_ROWS};
 }
 $('notes').onpointerdown = e => {
   if (!edit || !edit.chart) return;
@@ -609,7 +626,7 @@ $('notes').onpointerup = e => {
       if (dist <= tol && (!best || dist < best.dist)) best = {key: kind + i, dist};
     });
     if (best) { if (d.add && sel.has(best.key)) sel.delete(best.key); else sel.add(best.key); }
-    else if (!d.add) seek(p.t);
+    else if (!d.add) seek(p.t + noteShift());
   }
   showNotesInfo();
 };
@@ -950,12 +967,13 @@ function draw() {
   let level = since < 0 ? 0 : Math.exp(-since * 6) * (isBar(i) ? 1 : 0.7);   // nothing before the first beat
   let hue = ha + (hb - ha) * ((i % 8) / 8);
   const notes = edit.chart && edit.chart.lead.length ? edit.chart.lead : null;
+  const npos = pos - noteShift();     // the playhead in the chart notes' own time
   if (notes && (!s.pattern || s.pattern === 'notes')) {
     let lo = 0, hi = notes.length;
-    while (lo < hi) { const m = (lo + hi) >> 1; if (notes[m][0] <= pos) lo = m + 1; else hi = m; }
+    while (lo < hi) { const m = (lo + hi) >> 1; if (notes[m][0] <= npos) lo = m + 1; else hi = m; }
     const n = notes[lo - 1];
-    if (n && pos - n[0] < 2 * period()) {
-      level = pos - n[0] < n[2] ? 0.6 : Math.exp(-(pos - n[0] - n[2]) * 8);
+    if (n && npos - n[0] < 2 * period()) {
+      level = npos - n[0] < n[2] ? 0.6 : Math.exp(-(npos - n[0] - n[2]) * 8);
       hue = n[1] >= 0 ? ha + (hb - ha) * n[1] / 4 : ha;
     }
   }
@@ -979,9 +997,9 @@ function draw() {
   const styleMark = !balls && edit.chart && (edit.effects || []).find(e => (e.type === 'notepulse' || e.type === 'notecolor') && e.time <= pos && pos < e.end);
   if (styleMark) {
     const list = edit.chart.lead.length ? edit.chart.lead : edit.chart.drums.filter(d => d[1] <= 1).map(d => [d[0], d[1], 0]);
-    let lo = 0, hi = list.length; while (lo < hi) { const m = (lo + hi) >> 1; if (list[m][0] <= pos) lo = m + 1; else hi = m; }
+    let lo = 0, hi = list.length; while (lo < hi) { const m = (lo + hi) >> 1; if (list[m][0] <= npos) lo = m + 1; else hi = m; }
     const n = list[lo - 1];
-    if (styleMark.type === 'notepulse') { const age = n ? pos - n[0] : 1e9, sw = !n ? 0 : n[2] > 0 ? Math.max(0, 1 - age / (n[2] + 0.12)) ** 1.5 : Math.exp(-age / 0.12); light = 12 + 40 * sw; hue = n && n[1] >= 0 ? ha + (hb - ha) * n[1] / 4 : ha; }
+    if (styleMark.type === 'notepulse') { const age = n ? npos - n[0] : 1e9, sw = !n ? 0 : n[2] > 0 ? Math.max(0, 1 - age / (n[2] + 0.12)) ** 1.5 : Math.exp(-age / 0.12); light = 12 + 40 * sw; hue = n && n[1] >= 0 ? ha + (hb - ha) * n[1] / 4 : ha; }
     else { light = 35; hue = n ? (n[1] < 0 ? 0 : ha + 72 * n[1]) : ha; if (n && n[1] < 0) sat = 0; }
   }
   if (s.pattern === 'off') light = 3;
@@ -1057,6 +1075,7 @@ $('play').onclick = () => playing ? pause() : play(position());
 $('save').onclick = save;
 $('undo').onclick = () => { if (history.length) { edit = JSON.parse(history.pop()); shownSection = null; shownBuild = null; shownFx = null; dirty = true; sel.clear(); showNotesInfo(); updateButtons(); status('Undone'); } };
 $('notesDelete').onclick = deleteNotes; $('notesNone').onclick = selectNone;
+$('notesEarlier').onclick = () => nudgeNotes(-0.01); $('notesLater').onclick = () => nudgeNotes(0.01);
 $('clickVol').oninput = () => { clickGain.gain.value = +$('clickVol').value; };
 $('zoomIn').onclick = () => { zoom = Math.max(2, zoom / 1.5); };
 $('zoomOut').onclick = () => { zoom = Math.min(60, zoom * 1.5); };
@@ -1087,7 +1106,7 @@ document.addEventListener('keydown', e => {
     '[': () => shiftGrid(e.shiftKey ? -0.001 : -0.01), '{': () => shiftGrid(-0.001),
     ']': () => shiftGrid(e.shiftKey ? 0.001 : 0.01), '}': () => shiftGrid(0.001),
     b: setBar1, h: halfBeat, g: steadyFromAudio, d: addDrop, u: setBuild, l: addLift, s: addSection, x: deleteMark,
-    delete: deleteNotes, backspace: deleteNotes, escape: selectNone, f: addFade, o: addBalls, p: () => addNoteStyle('notepulse'), c: () => addNoteStyle('notecolor'), y: () => addNoteStyle('notehype'),
+    delete: deleteNotes, backspace: deleteNotes, escape: selectNone, ',': () => nudgeNotes(-0.01), '.': () => nudgeNotes(0.01), f: addFade, o: addBalls, p: () => addNoteStyle('notepulse'), c: () => addNoteStyle('notecolor'), y: () => addNoteStyle('notehype'),
     '+': () => $('zoomIn').click(), '=': () => $('zoomIn').click(), '-': () => $('zoomOut').click(),
   }[k];
   if (handled) { e.preventDefault(); handled(); }

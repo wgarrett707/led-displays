@@ -120,6 +120,16 @@ def save(trackId, edit):
                           'buildStart': round(float(d.get('buildStart', d['time'])), 3)} for d in edit['lifts']],
                         key=lambda d: d['time'])
     chart = edit.get('chart')
+    if chart and r.get('chart'):
+        # The song's chart notes moved earlier / later in the editor (s)
+        nudge = round(float(chart.get('nudge') or 0.0), 3)
+        if nudge != round(float(r['chart'].get('nudge') or 0.0), 3):
+            note('%s: chart notes moved %+d ms' % (r['title'], round(nudge * 1000)))
+            r['chartEdited'] = True
+        if nudge:
+            r['chart']['nudge'] = nudge
+        else:
+            r['chart'].pop('nudge', None)
     if chart and r.get('chart') and chart.get('part'):
         # Chart notes with some removed in the editor
         lead = [[round(float(t), 3), int(lane), round(float(held), 3)] for t, lane, held in chart['lead']]

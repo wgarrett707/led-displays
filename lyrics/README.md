@@ -126,7 +126,9 @@ The lights follow each song's real beat instead of assuming 120 BPM.
   the section's pattern: bigger, whiter, brighter pulses with longer tails (`HYPE_NOTES`), a burst of light at
   the matrix end on each note, bigger kick swells, more sparkles, full contrast. Per
   section: label, chorus, strip pattern (chart notes, pulses, breathe, chase, sparkle,
-  rainbow, solid, strobe, off) and colours. The strip preview follows the chart's notes when there is one. Save sends it to the Pi, which reloads it within seconds;
+  rainbow, solid, strobe, off) and colours. The strip preview follows the chart's notes when there is one; the Chart notes panel
+  removes notes (click or drag a box, Delete) and moves the song's chart notes earlier or later as a whole
+  (`chart.nudge`, 10 ms at a time, keys , and .). Save sends it to the Pi, which reloads it within seconds;
   hand-edited songs are never overwritten by the automatic analysis.
 - **`beatsync.py`**: the beat clock. Song time = Spotify's position + an offset, measured by matching the
   bass hits WLED's microphone hears (its UDP audio sync, multicast 239.0.0.1:11988, "send" mode) against

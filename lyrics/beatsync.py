@@ -78,6 +78,10 @@ class Analysis:
         self.leadPart = next((k for k in ('guitar', 'guitarghl', 'keys', 'bass', 'bassghl') if chart.get(k)), None)
         self.lead = np.array(chart[self.leadPart], float).reshape(-1, 3) if self.leadPart else np.zeros((0, 3))
         drums = np.array(chart.get('drums') or [], float).reshape(-1, 2)
+        # The song's chart notes moved earlier (negative) or later by this much (s), set in the editor
+        nudge = float(chart.get('nudge') or 0.0)
+        self.lead[:, 0] += nudge
+        drums[:, 0] += nudge
         self.drumTimes, self.drumLanes = drums[:, 0].copy(), drums[:, 1].astype(int)
         self.hasNotes = len(self.lead) > 0 or len(self.drumTimes) > 0
         # Per section: whether the chart has notes in it (those always play the notes, even quiet ones)
