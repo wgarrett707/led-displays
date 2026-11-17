@@ -107,7 +107,13 @@ The lights follow each song's real beat instead of assuming 120 BPM.
   steps or speeding up smoothly; cyan ticks under the waveform show exactly where each pulse fires
   (`strips.buildFirings`, matched by `firings` in the page) and they can be clicked along with the song.
   Without settings: 1 a beat, 2 from halfway, 4 for the last fifth. Pulses count back from the beat
-  nearest the drop, so they stay on the beat; per section: label, chorus, strip pattern (chart notes, pulses, breathe, chase, sparkle,
+  nearest the drop, so they stay on the beat. Strip effects at a mark (Strip effects panel, keys F and
+  O; `effects` in the analysis, each {type, time, end}): a fade-out (the strips fade to black over its
+  length, to the end of the song unless shortened, then stay dark, drops included) and 'balls' (balls
+  bounce and collide, flashing white when they hit, a new one dropping into the biggest gap on the beat
+  until they fill the strips by its end; `strips.Balls`, simulated in fixed steps from the effect's start
+  so it always plays the same; by default it runs to the next drop if one is within 32 bars). Per
+  section: label, chorus, strip pattern (chart notes, pulses, breathe, chase, sparkle,
   rainbow, solid, strobe, off) and colours. The strip preview follows the chart's notes when there is one. Save sends it to the Pi, which reloads it within seconds;
   hand-edited songs are never overwritten by the automatic analysis.
 - **`beatsync.py`**: the beat clock. Song time = Spotify's position + an offset, measured by matching the

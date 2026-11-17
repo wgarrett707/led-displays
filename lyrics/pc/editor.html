@@ -102,6 +102,17 @@
         <button id="markDelete" title="X">Delete nearest mark</button>
       </div>
     </div>
+    <div class="box" id="fxBox">
+      <h3>Strip effects <span id="fxInfo" class="dim" style="text-transform:none"></span></h3>
+      <div class="row">
+        <button id="fxFade" title="F">Fade out from here</button>
+        <button id="fxBalls" title="O">Balls fill up from here</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label>Lasts <input type="number" id="fxLen" min="0.25" step="0.25" style="width:72px"> <span id="fxUnit"></span></label>
+        <button id="fxDelete">Delete this effect</button>
+      </div>
+    </div>
     <div class="box" id="buildBox">
       <h3>Build-up <span id="buildInfo" class="dim" style="text-transform:none"></span></h3>
       <div class="row">
@@ -142,9 +153,11 @@
     <div><kbd>[</kbd> <kbd>]</kbd> grid 10 ms earlier / later (<kbd>Shift</kbd>: 1 ms)</div>
     <div><kbd>B</kbd> the nearest beat is bar 1 &middot; <kbd>H</kbd> half a beat &middot; <kbd>G</kbd> steady grid from the audio</div>
     <div><kbd>D</kbd> drop, <kbd>U</kbd> build-up start, <kbd>L</kbd> lift, <kbd>S</kbd> new section</div>
+    <div><kbd>F</kbd> fade out from here &middot; <kbd>O</kbd> balls fill up from here</div>
     <div><kbd>X</kbd> delete the nearest mark &middot; <kbd>Delete</kbd> delete the selected chart notes</div>
     <div><kbd>Ctrl</kbd>+<kbd>Z</kbd> undo &middot; click the waveform to jump</div>
     <div>Drops: a white hit, then a short strobe on the beat. Lifts: one big wave of colour.</div>
+    <div>Fade out: the strips fade to black over its length and stay dark. Balls: balls bounce and collide, more on every beat, until they fill the strips.</div>
     <div>Build-ups: pulses rush in from the far ends at the speeds in the Build-up panel; the cyan ticks under the waveform are where each pulse fires.</div>
     <div>Click track: high click on bar 1, low clicks on the other beats.</div>
   </div>
@@ -252,7 +265,7 @@ function hsl(h, s, l) { return `hsl(${((h % 360) + 360) % 360},${s}%,${l}%)`; }
 function fmt(t) { const m = Math.floor(t / 60); return m + ':' + (t - m * 60).toFixed(1).padStart(4, '0'); }
 
 // ---------------------------------------------------------------- editing
-function snapshot() { history.push(JSON.stringify(edit)); if (history.length > 100) history.shift(); shownBuild = null; }
+function snapshot() { history.push(JSON.stringify(edit)); if (history.length > 100) history.shift(); shownBuild = null; shownFx = null; }
 function changed(message) { dirty = true; updateButtons(); if (message) status(message); }
 function act(message, fn) { snapshot(); fn(); changed(message); }
 function status(text, bad) { $('status').textContent = text || ''; $('status').className = bad ? 'bad' : ''; }
@@ -285,6 +298,7 @@ function deleteMark() {
   const t = position(), marks = [];
   edit.drops.forEach(d => { marks.push({t: d.time, kind: 'drop', ref: d}); marks.push({t: d.buildStart, kind: 'build', ref: d}); });
   edit.lifts.forEach(d => marks.push({t: d.time, kind: 'lift', ref: d}));
+  (edit.effects || []).forEach(e => marks.push({t: e.time, kind: e.type === 'fadeout' ? 'fade-out' : 'balls effect', ref: e}));
   edit.sections.forEach((s, i) => { if (i > 0) marks.push({t: s.start, kind: 'section', ref: s}); });
   marks.sort((a, b) => Math.abs(a.t - t) - Math.abs(b.t - t));
   const m = marks[0];
@@ -292,6 +306,7 @@ function deleteMark() {
   act('Deleted the ' + m.kind + ' at ' + fmt(m.t), () => {
     if (m.kind === 'drop') edit.drops = edit.drops.filter(d => d !== m.ref);
     else if (m.kind === 'lift') edit.lifts = edit.lifts.filter(d => d !== m.ref);
+    else if (m.kind === 'fade-out' || m.kind === 'balls effect') edit.effects = edit.effects.filter(e => e !== m.ref);
     else if (m.kind === 'section') edit.sections = edit.sections.filter(s => s !== m.ref);
     else m.ref.buildStart = m.ref.time;    // no build-up
   });
@@ -536,6 +551,55 @@ $('notes').onpointerup = e => {
   showNotesInfo();
 };
 
+// ---------------------------------------------------------------- strip effects
+// Marked effects, each {type, time, end}: 'fadeout' (the strips fade to black from time to end, then stay
+// dark) and 'balls' (balls bouncing and colliding, more of them on every beat until they fill the strips;
+// strips.py Balls). A fade-out lasts to the end of the song unless shortened; balls run to the next drop
+// if there's one within 32 bars (a build-up into it), else 8 bars.
+const FX_NAMES = {fadeout: 'Fade out', balls: 'Balls fill up'};
+function fxIndex() {
+  const t = position(), fx = edit.effects;
+  let i = fx.findIndex(e => e.time <= t && t < e.end);
+  if (i < 0) i = fx.findIndex(e => e.time > t);
+  if (i < 0) i = fx.length - 1;
+  return i;
+}
+function addFade() {
+  const t = edit.beats[nearestBeat(position())];
+  if (t >= duration() - 0.5) return status('Too close to the end of the song', true);
+  act('Fade out from ' + fmt(t) + ' to the end', () => { edit.effects.push({type: 'fadeout', time: t, end: duration()}); edit.effects.sort((a, b) => a.time - b.time); });
+}
+function addBalls() {
+  const i = nearestBar(position()), t = edit.beats[i];
+  const drop = edit.drops.find(d => d.time > t + 0.5 && d.time <= timeAtBeat(i + 128));
+  const end = drop ? drop.time : Math.min(duration(), timeAtBeat(i + 32));
+  act('Balls fill up from ' + fmt(t) + ' to ' + fmt(end) + (drop ? ' (the drop)' : ''), () => { edit.effects.push({type: 'balls', time: t, end}); edit.effects.sort((a, b) => a.time - b.time); });
+}
+let shownFx = null;
+function showFx() {
+  if (!edit) return;
+  const i = fxIndex(), e = edit.effects[i], key = i + JSON.stringify(e || null);
+  if (key === shownFx) return;
+  shownFx = key;
+  $('fxLen').disabled = $('fxDelete').disabled = !e;
+  if (!e) { $('fxInfo').textContent = '(none in this song yet)'; $('fxLen').value = ''; $('fxUnit').textContent = ''; return; }
+  const bars = e.type === 'balls';
+  $('fxInfo').textContent = `(${FX_NAMES[e.type]}, ${fmt(e.time)} to ${fmt(e.end)})`;
+  $('fxUnit').textContent = bars ? 'bars' : 'seconds';
+  $('fxLen').step = bars ? '0.25' : '0.5';
+  $('fxLen').value = bars ? String(+((beatIndexAt(e.end) - beatIndexAt(e.time)) / 4).toFixed(2)) : (e.end - e.time).toFixed(1);
+}
+$('fxFade').onclick = addFade; $('fxBalls').onclick = addBalls;
+$('fxLen').onchange = () => {
+  const i = fxIndex(), v = +$('fxLen').value;
+  if (!(v > 0) || i < 0) return;
+  act(null, () => {
+    const e = edit.effects[i];
+    e.end = Math.min(duration(), e.type === 'balls' ? timeAtBeat(beatIndexAt(e.time) + v * 4) : e.time + v);
+  });
+};
+$('fxDelete').onclick = () => { const i = fxIndex(); if (i < 0) return; const e = edit.effects[i]; act('Deleted the ' + FX_NAMES[e.type].toLowerCase() + ' at ' + fmt(e.time), () => { edit.effects.splice(i, 1); }); };
+
 // ---------------------------------------------------------------- build-ups
 // A drop's build-up fires pulses at set speeds: 'stages' are [beats before the drop, pulses per beat], each
 // holding until the next; 'smooth' speeds up gradually between them. Without stages: 1 a beat, 2 from
@@ -704,6 +768,20 @@ function drawMarks(g, X, t0, t1, top, h, r, labels) {
     g.fillStyle = '#ff3b3b'; g.fillRect(X(d.time) - r, top, 3 * r, h);
     if (labels) { g.font = `bold ${11 * r}px system-ui`; g.fillText('DROP', X(d.time) + 4 * r, top + h - 6 * r); }
   }
+  for (const e of edit.effects || []) {
+    if (e.end < t0 || e.time > t1) continue;
+    if (e.type === 'fadeout') {
+      const grad = g.createLinearGradient(X(e.time), 0, X(e.end), 0); grad.addColorStop(0, 'rgba(0,0,0,0)'); grad.addColorStop(1, 'rgba(0,0,0,0.8)');
+      g.fillStyle = grad; g.fillRect(X(e.time), top + 12 * r, X(e.end) - X(e.time), h - 12 * r);
+      g.fillStyle = '#c0c4cc'; g.fillRect(X(e.time) - r, top, 2 * r, h);
+      if (labels) { g.font = `${11 * r}px system-ui`; g.fillText('fade out', X(e.time) + 4 * r, top + 24 * r); }
+    } else {
+      g.fillStyle = 'rgba(109,255,168,.10)'; g.fillRect(X(e.time), top + 12 * r, X(e.end) - X(e.time), h - 12 * r);
+      g.fillStyle = '#6dffa8'; g.fillRect(X(e.time) - r, top, 2 * r, h);
+      for (let k = 0; k < 18; k++) { const f = k / 18, x = X(e.time + (e.end - e.time) * f); g.beginPath(); g.arc(x, top + h * (0.3 + 0.5 * ((k * 0.618) % 1)), (1.5 + 2 * f) * r, 0, 7); g.fill(); }
+      if (labels) { g.font = `${11 * r}px system-ui`; g.fillText('balls', X(e.time) + 4 * r, top + 24 * r); }
+    }
+  }
   for (const d of edit.lifts) { g.fillStyle = '#ffa53b'; g.fillRect(X(d.time) - r, top, 2 * r, h); if (labels) { g.font = `${11 * r}px system-ui`; g.fillText('lift', X(d.time) + 4 * r, top + h - 6 * r); } }
 }
 
@@ -712,7 +790,7 @@ function draw() {
   if (!song || !edit) return;
   const pos = position(), dur = duration();
   $('time').textContent = fmt(pos) + ' / ' + fmt(dur);
-  showSection(); showBuild();
+  showSection(); showBuild(); showFx();
 
   // Whole song
   let [g, w, h, r] = sizeCanvas($('overview'));
@@ -779,7 +857,10 @@ function draw() {
     sat = 90 - 80 * p; light = 15 + 50 * p * pulse + 10 * p;
   }
   const drop = edit.drops.find(d => pos >= d.time && pos - d.time < 0.35);
+  const balls = (edit.effects || []).find(e => e.type === 'balls' && e.time <= pos && pos < e.end);
+  if (balls) { const p = (pos - balls.time) / (balls.end - balls.time); light = 12 + 45 * p; sat = 85; hue = ha + (hb - ha) * ((pos * 1.7) % 1); }
   if (s.pattern === 'off') light = 3;
+  for (const e of edit.effects || []) if (e.type === 'fadeout' && pos >= e.time) light *= Math.max(0, 1 - (pos - e.time) / (e.end - e.time));
   g.fillStyle = drop ? '#fff' : hsl(hue, sat, light);
   g.fillRect(0, 0, w, h);
 }
@@ -808,12 +889,13 @@ async function loadSongs(keep) {
 }
 async function openSong(id) {
   if (dirty && !confirm('Discard unsaved changes to this song?')) { $('song').value = song.id; return; }
-  pause(); buffer = null; song = null; edit = null; taps = []; history = []; dirty = false; shownSection = null; shownBuild = null;
+  pause(); buffer = null; song = null; edit = null; taps = []; history = []; dirty = false; shownSection = null; shownBuild = null; shownFx = null;
   status('Loading...');
   const r = await fetch('/api/song?id=' + id); song = await r.json();
   if (song.error && !song.beats) { status(song.error, true); return; }
   edit = {beats: song.beats.slice(), downbeat: song.downbeat, sections: JSON.parse(JSON.stringify(song.sections)),
           drops: JSON.parse(JSON.stringify(song.drops)), lifts: JSON.parse(JSON.stringify(song.lifts)), shift: 0};
+  edit.effects = JSON.parse(JSON.stringify(song.effects || []));
   const part = song.chart && LEAD_PARTS.find(k => song.chart[k] && song.chart[k].length);
   edit.chart = song.chart ? {part: part || null, lead: part ? JSON.parse(JSON.stringify(song.chart[part])) : [],
                               drums: JSON.parse(JSON.stringify(song.chart.drums || []))} : null;
@@ -848,7 +930,7 @@ async function pollLog() {
 $('song').onchange = () => openSong($('song').value);
 $('play').onclick = () => playing ? pause() : play(position());
 $('save').onclick = save;
-$('undo').onclick = () => { if (history.length) { edit = JSON.parse(history.pop()); shownSection = null; shownBuild = null; dirty = true; sel.clear(); showNotesInfo(); updateButtons(); status('Undone'); } };
+$('undo').onclick = () => { if (history.length) { edit = JSON.parse(history.pop()); shownSection = null; shownBuild = null; shownFx = null; dirty = true; sel.clear(); showNotesInfo(); updateButtons(); status('Undone'); } };
 $('notesDelete').onclick = deleteNotes; $('notesNone').onclick = selectNone;
 $('clickVol').oninput = () => { clickGain.gain.value = +$('clickVol').value; };
 $('zoomIn').onclick = () => { zoom = Math.max(2, zoom / 1.5); };
@@ -880,7 +962,7 @@ document.addEventListener('keydown', e => {
     '[': () => shiftGrid(e.shiftKey ? -0.001 : -0.01), '{': () => shiftGrid(-0.001),
     ']': () => shiftGrid(e.shiftKey ? 0.001 : 0.01), '}': () => shiftGrid(0.001),
     b: setBar1, h: halfBeat, g: steadyFromAudio, d: addDrop, u: setBuild, l: addLift, s: addSection, x: deleteMark,
-    delete: deleteNotes, backspace: deleteNotes, escape: selectNone,
+    delete: deleteNotes, backspace: deleteNotes, escape: selectNone, f: addFade, o: addBalls,
     '+': () => $('zoomIn').click(), '=': () => $('zoomIn').click(), '-': () => $('zoomOut').click(),
   }[k];
   if (handled) { e.preventDefault(); handled(); }

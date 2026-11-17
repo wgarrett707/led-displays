@@ -44,6 +44,11 @@ CEILING = 1.0
 # chosen in the editor
 CALM_BELOW = 0.35
 CALM_PATTERN = 'drift'
+# The 'balls' effect: balls this many LEDs long (so about LONGEST / BALL_WIDTH of them fill the strip),
+# starting with BALL_START of them; simulated in steps of BALL_STEP seconds
+BALL_WIDTH = 6
+BALL_START = 3
+BALL_STEP = 1 / 200.0
 # Chart notes held longer than this (s) are looked for no further back
 NOTE_HOLD_MAX = 8.0
 
@@ -93,6 +98,77 @@ def buildFirings(d, total):
                 out.append(m / r)
                 m -= 1
     return np.array(sorted(out))
+
+
+class Balls:
+    # One 'balls' effect: balls bounce along the strip, off its ends and off each other (all the same
+    # weight, so two that collide swap speeds). A new one drops into the biggest gap on the beat, the
+    # number growing steadily until they fill the strip by the effect's end. Simulated in small fixed
+    # steps from the effect's start, so it's always the same; jumping back starts it again.
+    def __init__(self, e, beats, period):
+        self.e = e
+        start, end = e['time'], e['end']
+        n = max(BALL_START + 1, int(LONGEST // BALL_WIDTH))
+        # New balls on beats spread evenly over the first 85% (evenly in time if the beats run out)
+        k = n - BALL_START
+        on = beats[(beats > start) & (beats < start + 0.85 * (end - start))]
+        if len(on) >= k:
+            self.spawn = list(on[np.round(np.linspace(0, len(on) - 1, k)).astype(int)])
+        else:
+            self.spawn = list(start + np.linspace(0, 0.85 * (end - start), k + 1)[1:])
+        rng = np.random.RandomState(int(start * 1000) & 0x7fffffff)
+        # About a quarter of the strip a beat, either way
+        self.speeds = rng.uniform(0.6, 1.3, n) * (LONGEST / (4 * period)) * rng.choice([-1.0, 1.0], n)
+        self.shade = (np.arange(n) * 0.618) % 1.0        # each ball's place in the section's colour range
+        self.reset()
+
+    def reset(self):
+        self.t = self.e['time']
+        self.x = (np.arange(BALL_START) + 0.5) * LONGEST / BALL_START
+        self.v = self.speeds[:BALL_START].copy()
+        self.ids = np.arange(BALL_START)
+        self.hit = np.full(BALL_START, -9.0)
+        self.next = 0
+
+    def advance(self, t):
+        if t < self.t - 0.25:
+            self.reset()
+        while self.t + BALL_STEP <= t:
+            # Catching up after a jump: coarser steps, so the strips don't stall
+            step = BALL_STEP * 4 if t - self.t > 1.0 else BALL_STEP
+            self.t += step
+            while self.next < len(self.spawn) and self.spawn[self.next] <= self.t:
+                self.add()
+            self.step(step)
+
+    def add(self):
+        # Into the middle of the biggest gap
+        w = BALL_WIDTH
+        edges = np.concatenate([[0.0], np.repeat(self.x, 2) + np.tile([-w / 2.0, w / 2.0], len(self.x)), [float(LONGEST)]])
+        gaps = edges[1::2] - edges[0::2]
+        g = int(np.argmax(gaps))
+        x = (edges[2 * g] + edges[2 * g + 1]) / 2
+        i = BALL_START + self.next
+        self.x = np.insert(self.x, g, x)
+        self.v = np.insert(self.v, g, self.speeds[i])
+        self.ids = np.insert(self.ids, g, i)
+        self.hit = np.insert(self.hit, g, self.t)
+        self.next += 1
+
+    def step(self, dt):
+        w, x, v = BALL_WIDTH, self.x, self.v
+        x += v * dt
+        lo, hi = x < w / 2.0, x > LONGEST - w / 2.0
+        x[lo], v[lo] = w - x[lo], np.abs(v[lo])
+        x[hi], v[hi] = 2 * (LONGEST - w / 2.0) - x[hi], -np.abs(v[hi])
+        for i in range(len(x) - 1):
+            if x[i + 1] - x[i] < w:
+                if v[i] > v[i + 1]:
+                    v[i], v[i + 1] = v[i + 1], v[i]
+                    self.hit[i] = self.hit[i + 1] = self.t
+                mid = (x[i] + x[i + 1]) / 2
+                x[i], x[i + 1] = mid - w / 2.0, mid + w / 2.0
+        np.clip(x, w / 2.0, LONGEST - w / 2.0, out=x)
 
 
 class Strips(threading.Thread):
@@ -166,7 +242,11 @@ class Strips(threading.Thread):
                 pattern = CALM_PATTERN
             else:
                 pattern = 'notes' if a is not None and a.hasNotes else 'pulses'
-        if st.build is not None and pattern != 'off':
+        if st.balls is not None:
+            # A 'balls' effect marked in the editor takes over from the pattern while it runs
+            self.drawBalls(out, st, hues, level)
+            pattern = 'balls'
+        elif st.build is not None and pattern != 'off':
             self.buildUp(out, st, hues, level)
         else:
             getattr(self, 'draw_' + pattern, self.draw_pulses)(out, st, hues, level)
@@ -185,7 +265,37 @@ class Strips(threading.Thread):
                 every = 1 if 1.0 / st.period <= MAX_FLASHES else 2
                 if int(math.floor(beatsSince)) % every == 0 and (beatsSince % 1.0) * st.period < FLASH_ON:
                     out = np.maximum(out, 0.9)
+        if st.fade < 1.0:
+            # A fade-out marked in the editor: everything fades to black (and stays dark)
+            out = out * st.fade
         return out
+
+    def drawBalls(self, out, st, hues, level):
+        # The 'balls' effect: see Balls. Each ball has its own colour from the section's range and flashes
+        # whiter when it hits another; for the last few percent the strip fills in completely.
+        a, e = self.clock.analysis, st.balls
+        key = (e['time'], e['end'], len(a.beats))
+        sims = getattr(self, '_balls', {})
+        if key not in sims:
+            sims = {key: Balls(e, a.beats, st.period)}
+            self._balls = sims
+        sim = sims[key]
+        sim.advance(st.time)
+        p = (st.time - e['time']) / (e['end'] - e['time'])
+        out += rgb(hues[0], 0.9, 0.03)
+        if len(sim.x):
+            flash = np.exp(-np.maximum(0.0, st.time - sim.hit) / 0.12)
+            hue = hues[0] + (hues[1] - hues[0]) * sim.shade[sim.ids]
+            colors = hsvArray(hue, 1.0, 1.0) * (1 - flash[:, None]) * 0.85 + flash[:, None]
+            # Each ball lit across its width, with soft half-LED edges
+            dist = np.abs(self.d[None, :] - sim.x[:, None])
+            shape = np.clip(BALL_WIDTH / 2.0 + 0.5 - dist, 0, 1)
+            out += (shape.T @ colors).astype(np.float32) * level
+        if p > 0.92:
+            q = (p - 0.92) / 0.08
+            mix = (self.d / LONGEST)[:, None]
+            full = ((1 - mix) * rgb(hues[0], 0.85, 1.0) + mix * rgb(hues[1], 0.85, 1.0)) * level
+            out[:] = out * (1 - q) + full * q
 
     def soften(self, out, st, hues):
         # The glow under everything, the effects brought closer to it, and a soft limiter on top. A

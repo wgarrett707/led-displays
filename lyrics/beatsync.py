@@ -61,6 +61,9 @@ class Analysis:
         self.sectionStarts = np.array([s['start'] for s in self.sections])
         self.drops = data['drops']
         self.lifts = data['lifts']
+        # Strip effects marked in the editor, each {'type', 'time', 'end'}: 'fadeout' (the strips fade to
+        # black from time to end, and stay dark) and 'balls' (balls filling up the strips)
+        self.effects = [e for e in data.get('effects') or [] if e.get('type') in ('fadeout', 'balls') and e['end'] > e['time']]
         self.env = np.frombuffer(base64.b64decode(data['env']), np.uint8).astype(np.float32) / 255
         self.envRate = data['envRate']
         # Notes from a Clone Hero chart of the song (analyze.py / charts.py), already in song time:
@@ -123,6 +126,13 @@ class BeatState:
                 self.buildDrop, self.beatsToDrop = d, round(a.beatAt(d['time'])) - index
             elif t >= d['time']:
                 self.sinceDrop, self.dropStrength = t - d['time'], d['strength']
+        # Marked effects: how far a fade-out has got (1 = none, 0 = dark) and the 'balls' effect running now
+        self.fade, self.balls = 1.0, None
+        for e in a.effects:
+            if e['type'] == 'fadeout' and t >= e['time']:
+                self.fade = min(self.fade, max(0.0, 1 - (t - e['time']) / (e['end'] - e['time'])))
+            elif e['type'] == 'balls' and e['time'] <= t < e['end']:
+                self.balls = e
         self.sinceLift = None
         for d in a.lifts:
             if t >= d['time']:
