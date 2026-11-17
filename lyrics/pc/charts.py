@@ -22,8 +22,8 @@ import requests
 SEARCH = 'https://api.enchor.us/search'
 FILES = 'https://files.enchor.us/%s.sng'
 HEADERS = {'User-Agent': 'led-lights-chart-lookup/0.1'}
-# Bump to look again for charts for songs already checked
-VERSION = 1
+# Bump to look again for charts for songs checked before (2: charts of a different edit, in pieces)
+VERSION = 2
 SR = 22050
 # Onset envelopes for lining up: 150 frames a second
 RATE = 150
@@ -294,6 +294,69 @@ def mapping(ours, theirs):
     return float(s), float(o), int(best.sum()), len(pts), float(pts[best, 0].min() - 7.5), float(pts[best, 0].max() + 7.5)
 
 
+# Harmony features for lining up the song's overall structure: 10 a second
+FEAT_HOP = SR // 10
+
+
+def harmony(y):
+    c = librosa.feature.chroma_stft(y=y, sr=SR, hop_length=FEAT_HOP, n_fft=4096)
+    return c / np.maximum(np.linalg.norm(c, axis=0, keepdims=True), 1e-9)
+
+
+def piecewise(ours, theirs, oursHarmony, theirsHarmony):
+    # For a different edit of the song than the chart's (a radio edit with parts cut out, say), where no
+    # single offset fits. Rhythm alone can't do it: a dance track repeats the same bar so much that a
+    # stretch of it matches many places equally well. So the two are first lined up as a whole by
+    # their harmony (dynamic time warping, which allows for parts cut out of either), then each 15 s
+    # stretch of ours is placed exactly by rhythm within half a second of where that puts it. Runs of
+    # neighbouring stretches that agree become pieces, each lined up on its own.
+    # Returns ([(scale, offset, our from, our to)], stretches in pieces, stretches tried) or None.
+    D, path = librosa.sequence.dtw(X=oursHarmony, Y=theirsHarmony, metric='euclidean')
+    path = path[::-1] / 10.0                 # (our time, chart time) pairs, in order
+    width = 15 * RATE
+    reach = RATE // 2
+    pts = []
+    for start in range(0, int(len(ours) / RATE) - 15, 5):
+        seg = ours[start * RATE:start * RATE + width]
+        if seg.std() < 0.3:
+            continue    # silence
+        near = np.abs(path[:, 0] - (start + 7.5)) < 0.5
+        if not near.any():
+            continue
+        guess = int(round((np.median(path[near, 1]) - 7.5) * RATE))      # chart frame for this stretch
+        lo, hi = max(0, guess - reach), min(len(theirs), guess + width + reach)
+        if hi - lo <= width:
+            continue
+        score = np.correlate(theirs[lo:hi], seg, 'valid')
+        pts.append((start + 7.5, (lo + int(np.argmax(score))) / RATE + 7.5))    # (our time, chart time)
+    if len(pts) < 4:
+        return None
+    runs, run = [], [pts[0]]
+    for prev, cur in zip(pts, pts[1:]):
+        if cur[0] - prev[0] <= 10 and abs((cur[0] - cur[1]) - (prev[0] - prev[1])) < 0.04:
+            run.append(cur)
+        else:
+            runs.append(run)
+            run = [cur]
+    runs.append(run)
+    pieces = []
+    for run in runs:
+        if len(run) < 2:
+            continue
+        r = np.array(run)
+        s, o = np.polyfit(r[:, 1], r[:, 0], 1) if len(run) >= 3 else (1.0, float(np.mean(r[:, 0] - r[:, 1])))
+        if abs(s - 1) > 0.02:
+            s, o = 1.0, float(np.mean(r[:, 0] - r[:, 1]))
+        pieces.append([float(s), float(o), r[0, 0] - 7.5, r[-1, 0] + 7.5, len(run)])
+    if not pieces:
+        return None
+    # Neighbouring pieces overlap by up to a stretch: split the overlap down the middle
+    for a, b in zip(pieces, pieces[1:]):
+        if a[3] > b[2]:
+            a[3] = b[2] = (a[3] + b[2]) / 2
+    return [tuple(p[:4]) for p in pieces], sum(p[4] for p in pieces), len(pts)
+
+
 # ---------------------------------------------------------------- per song
 
 def findChart(result, y, ourTitle, tries=4):
@@ -302,7 +365,7 @@ def findChart(result, y, ourTitle, tries=4):
     title, artist = result['title'], result['artist'].split(',')[0]
     title = re.sub(r'\s*[\(\[][^\)\]]*\b(feat|ft|with)\.?\s[^\)\]]*[\)\]]', '', title, flags=re.I)
     title = re.sub(r'\s+-\s+.*(remaster|version|edit|live|mix|mono|stereo).*$', '', title, flags=re.I).strip()
-    ours = None
+    ours = oursHarmony = None
     for c in candidates(title, artist, result['durationMs'], ourTitle)[:tries]:
         label = '%s - %s (charted by %s)' % (c.get('artist'), c.get('name'), c.get('charter'))
         try:
@@ -318,30 +381,42 @@ def findChart(result, y, ourTitle, tries=4):
             audio = chartAudio(url, mask, files)
             if audio is None:
                 continue
-            fit = mapping(ours, envelope(audio))
-            if not fit or fit[2] < max(8, 0.6 * fit[3]):
-                log('  chart %s: does not line up with our audio%s' % (label, ' (%d/%d)' % fit[2:4] if fit else ''))
-                continue
-            scale, offset, agree, tried, first, last = fit
+            theirs = envelope(audio)
             delay = float(meta.get('delay') or 0) / 1000.0 + notes.pop('chartOffset', 0.0)
-
-            def ourTime(t):
-                return scale * (t + delay) + offset
-            out = {'md5': c['md5'], 'name': c.get('name'), 'artist': c.get('artist'), 'charter': c.get('charter'),
-                   'scale': round(scale, 6), 'offset': round(offset + scale * delay, 4), 'agree': '%d/%d' % (agree, tried)}
-            # Notes only where the two audios were seen to line up (plus a little either side)
-            lo, hi = ourTime(first - delay - 10), ourTime(last - delay + 10)
-            for key, events in notes.items():
-                if key == 'sections':
-                    out[key] = [[round(ourTime(t), 3), name] for t, name in events if lo <= ourTime(t) <= hi]
+            # Pieces of the song, each (scale, offset, our from, our to): chart audio time c is our time
+            # scale * c + offset between 'our from' and 'our to'. One piece when it's the same edit as ours.
+            fit = mapping(ours, theirs)
+            if fit and fit[2] >= max(8, 0.6 * fit[3]):
+                scale, offset, agree, tried, first, last = fit
+                pieces = [(scale, offset, scale * (first - 10) + offset, scale * (last + 10) + offset)]
+                how = '%d/%d stretches agree, offset %+.2f s' % (agree, tried, offset + scale * delay)
+            else:
+                if oursHarmony is None:
+                    oursHarmony = harmony(y)
+                cut = piecewise(ours, theirs, oursHarmony, harmony(audio))
+                if not cut or cut[1] < max(8, 0.6 * cut[2]):
+                    log('  chart %s: does not line up with our audio (%s as one piece, %s in pieces)' % (
+                        label, '%d/%d' % fit[2:4] if fit else '-', '%d/%d' % cut[1:] if cut else '-'))
                     continue
-                kept = [[round(ourTime(t), 3), lane, round(held * scale, 3)] for t, lane, held in events
-                        if lo <= ourTime(t) <= hi]
+                pieces, agree, tried = cut
+                how = 'a different edit: %d pieces, %d/%d stretches agree' % (len(pieces), agree, tried)
+            out = {'md5': c['md5'], 'name': c.get('name'), 'artist': c.get('artist'), 'charter': c.get('charter'),
+                   'pieces': [[round(s, 6), round(o + s * delay, 4), round(a, 3), round(b, 3)] for s, o, a, b in pieces],
+                   'agree': '%d/%d' % (agree, tried)}
+            # Notes only where the two audios were seen to line up (a chorus the chart has twice and our
+            # edit has once comes through once)
+            for key, events in notes.items():
+                kept = []
+                for s, o, a, b in pieces:
+                    for e in events:
+                        t = s * (e[0] + delay) + o
+                        if a <= t < b:
+                            kept.append([round(t, 3), e[1]] if key in ('sections', 'drums') else
+                                        [round(t, 3), e[1], round(e[2] * s, 3)])
                 if kept:
-                    out[key] = [n[:2] if key == 'drums' else n for n in kept]
-            log('  chart %s lines up (%d/%d stretches agree, offset %+.2f s): %s' % (
-                label, agree, tried, out['offset'],
-                ', '.join('%d %s' % (len(out[k]), k) for k in ('guitar', 'guitarghl', 'keys', 'bass', 'bassghl', 'drums') if k in out)))
+                    out[key] = sorted(kept, key=lambda n: n[0])
+            log('  chart %s lines up (%s): %s' % (label, how, ', '.join(
+                '%d %s' % (len(out[k]), k) for k in ('guitar', 'guitarghl', 'keys', 'bass', 'bassghl', 'drums') if k in out)))
             return out
         except Exception as e:
             log('  chart %s: failed (%r)' % (label, e))

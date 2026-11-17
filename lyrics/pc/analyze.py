@@ -467,7 +467,9 @@ def addCharts(force=False):
         path = os.path.join(OUT_DIR, name)
         with open(path) as f:
             result = json.load(f)
-        if result.get('error') or (result.get('chartChecked') == charts.VERSION and not force):
+        # Songs with a chart already keep it; the rest are looked at again after charts.py improves
+        if result.get('error') or result.get('chartEdited') or \
+                (not force and (result.get('chart') or result.get('chartChecked') == charts.VERSION)):
             continue
         audio = [f for f in os.listdir(AUDIO_DIR) if f.startswith(result['id'] + '.')]
         if not audio:

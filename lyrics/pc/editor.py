@@ -106,6 +106,17 @@ def save(trackId, edit):
     r['lifts'] = sorted([{'time': round(float(d['time']), 3), 'strength': float(d.get('strength', 5)),
                           'buildStart': round(float(d.get('buildStart', d['time'])), 3)} for d in edit['lifts']],
                         key=lambda d: d['time'])
+    chart = edit.get('chart')
+    if chart and r.get('chart') and chart.get('part'):
+        # Chart notes with some removed in the editor
+        lead = [[round(float(t), 3), int(lane), round(float(held), 3)] for t, lane, held in chart['lead']]
+        drums = [[round(float(t), 3), int(lane)] for t, lane in chart['drums']]
+        if lead != r['chart'].get(chart['part']) or drums != (r['chart'].get('drums') or []):
+            removed = len(r['chart'].get(chart['part']) or []) - len(lead) + len(r['chart'].get('drums') or []) - len(drums)
+            note('%s: %d chart note(s) removed' % (r['title'], removed))
+            r['chart'][chart['part']] = sorted(lead)
+            r['chart']['drums'] = sorted(drums)
+            r['chartEdited'] = True
     r['edited'] = True
     r['editedAt'] = time.strftime('%Y-%m-%d %H:%M')
     with open(path + '.tmp', 'w') as f:

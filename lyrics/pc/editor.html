@@ -45,6 +45,16 @@
   <canvas id="detail" data-h="210" style="height:210px" aria-label="Zoomed view around the playhead"></canvas>
   <canvas id="preview" data-h="22" style="height:22px" aria-label="Rough preview of the strips"></canvas>
 
+  <div class="box" id="notesBox">
+    <h3>Chart notes <span id="notesInfo" class="dim" style="text-transform:none"></span></h3>
+    <canvas id="notes" data-h="170" style="height:170px; cursor:crosshair" aria-label="Chart notes around the playhead"></canvas>
+    <div class="row" style="margin-top:8px">
+      <button id="notesDelete" disabled title="Delete">Delete selected notes</button>
+      <button id="notesNone" disabled title="Esc">Select none</button>
+      <span class="dim">Click a note to select it, drag a box to select several (<kbd>Shift</kbd> adds to the selection), <kbd>Delete</kbd> removes them. Click empty space to jump there.</span>
+    </div>
+  </div>
+
   <div class="box row">
     <button id="play" title="Space">&#9654; Play</button>
     <span id="time">0:00.0</span>
@@ -119,7 +129,7 @@
     <div><kbd>[</kbd> <kbd>]</kbd> grid 10 ms earlier / later (<kbd>Shift</kbd>: 1 ms)</div>
     <div><kbd>B</kbd> the nearest beat is bar 1 &middot; <kbd>H</kbd> half a beat &middot; <kbd>G</kbd> steady grid from the audio</div>
     <div><kbd>D</kbd> drop, <kbd>U</kbd> build-up start, <kbd>L</kbd> lift, <kbd>S</kbd> new section</div>
-    <div><kbd>X</kbd> delete the nearest mark</div>
+    <div><kbd>X</kbd> delete the nearest mark &middot; <kbd>Delete</kbd> delete the selected chart notes</div>
     <div><kbd>Ctrl</kbd>+<kbd>Z</kbd> undo &middot; click the waveform to jump</div>
     <div>Drops: a white hit, then a short strobe on the beat. Lifts: one big wave of colour.</div>
     <div>Click track: high click on bar 1, low clicks on the other beats.</div>
@@ -369,6 +379,136 @@ function halfBeat() {
   });
 }
 
+// ---------------------------------------------------------------- chart notes
+// The song's chart notes as the strips use them: the melody part (the first of these the chart has) and
+// the drums. Notes are [time, lane, seconds held] and drums [time, lane]; selection is by position in those
+// lists ('L' + i for the melody, 'D' + i for drums) and is cleared by any edit.
+const LEAD_PARTS = ['guitar', 'guitarghl', 'keys', 'bass', 'bassghl'];
+const PART_NAMES = {guitar: 'guitar', guitarghl: 'guitar (6-fret)', keys: 'keys', bass: 'bass', bassghl: 'bass (6-fret)'};
+const FRET_COLORS = ['#2fd04f', '#ff3b3b', '#ffd23b', '#3b8bff', '#ff9a2f'];
+const DRUM_NAMES = ['Kick', 'Snare', 'Hi-hat', 'Tom', 'Cymbal'];
+const LANE_NAMES = ['Green', 'Red', 'Yellow', 'Blue', 'Orange'];
+let sel = new Set(), drag = null;
+const NOTE_ROWS = 11;      // 5 frets, a gap, 5 drums
+function noteRow(kind, lane) { return kind === 'L' ? lane : 6 + Math.max(0, Math.min(4, lane)); }
+function firstNoteAfter(list, t) { let lo = 0, hi = list.length; while (lo < hi) { const m = (lo + hi) >> 1; if (list[m][0] < t) lo = m + 1; else hi = m; } return lo; }
+function notesInView(t0, t1, fn) {
+  const c = edit.chart;
+  for (let i = firstNoteAfter(c.lead, t0 - 10); i < c.lead.length && c.lead[i][0] <= t1; i++) if (c.lead[i][0] + c.lead[i][2] >= t0) fn('L', i, c.lead[i]);
+  for (let i = firstNoteAfter(c.drums, t0); i < c.drums.length && c.drums[i][0] <= t1; i++) fn('D', i, c.drums[i]);
+}
+function showNotesInfo() {
+  const c = edit && edit.chart;
+  $('notesBox').style.display = c ? '' : 'none';
+  if (!c) return;
+  $('notesInfo').textContent = `(${c.lead.length} ${PART_NAMES[c.part] || 'melody'} notes, ${c.drums.length} drum hits` +
+    (sel.size ? `; ${sel.size} selected)` : ')');
+  $('notesDelete').disabled = $('notesNone').disabled = !sel.size;
+}
+function deleteNotes() {
+  if (!sel.size) return;
+  const n = sel.size;
+  act(`Deleted ${n} note${n > 1 ? 's' : ''}`, () => {
+    edit.chart.lead = edit.chart.lead.filter((x, i) => !sel.has('L' + i));
+    edit.chart.drums = edit.chart.drums.filter((x, i) => !sel.has('D' + i));
+  });
+  sel.clear(); showNotesInfo();
+}
+function selectNone() { sel.clear(); showNotesInfo(); }
+function drawNotes(t0, t1) {
+  if (!edit.chart) return;
+  const [g, w, h, r] = sizeCanvas($('notes'));
+  g.clearRect(0, 0, w, h);
+  const X = t => (t - t0) / (t1 - t0) * w, rh = h / NOTE_ROWS;
+  // Lane backgrounds and names
+  for (let row = 0; row < NOTE_ROWS; row++) {
+    if (row === 5) continue;
+    g.fillStyle = row < 5 ? 'rgba(255,255,255,.035)' : 'rgba(255,255,255,.05)';
+    g.fillRect(0, row * rh + 1, w, rh - 2);
+  }
+  // Beat lines
+  const b = edit.beats;
+  for (let i = Math.max(0, firstAfter(t0) - 1); i < b.length && b[i] <= t1; i++) {
+    g.fillStyle = isBar(i) ? 'rgba(255,255,255,.35)' : 'rgba(255,255,255,.12)';
+    g.fillRect(X(b[i]), 0, isBar(i) ? 2 * r : r, h);
+  }
+  notesInView(t0, t1, (kind, i, n) => {
+    const x = X(n[0]), on = sel.has(kind + i);
+    if (kind === 'L') {
+      const top = n[1] < 0 ? 0 : n[1] * rh, height = n[1] < 0 ? 5 * rh : rh;    // an open note: all five lanes
+      const len = Math.max(5 * r, X(n[0] + n[2]) - x);
+      g.fillStyle = n[1] < 0 ? '#d8d8ff' : FRET_COLORS[n[1]];
+      g.globalAlpha = n[1] < 0 ? 0.45 : 1;
+      if (n[2] > 0) { g.globalAlpha *= 0.45; g.fillRect(x, top + rh * 0.35, len, rh * 0.3); g.globalAlpha = n[1] < 0 ? 0.45 : 1; }
+      g.fillRect(x - 2.5 * r, top + rh * 0.15, 5 * r, height - rh * 0.3);
+      g.globalAlpha = 1;
+      if (on) { g.strokeStyle = '#fff'; g.lineWidth = 2 * r; g.strokeRect(x - 4 * r, top + rh * 0.05, 8 * r + (n[2] > 0 ? len - 5 * r : 0), height - rh * 0.1); }
+    } else {
+      const y = noteRow('D', n[1]) * rh;
+      g.fillStyle = '#c9ced8';
+      g.fillRect(x - 2.5 * r, y + rh * 0.2, 5 * r, rh * 0.6);
+      if (on) { g.strokeStyle = '#fff'; g.lineWidth = 2 * r; g.strokeRect(x - 4 * r, y + rh * 0.05, 8 * r, rh * 0.9); }
+    }
+  });
+  g.font = `${10 * r}px system-ui`;
+  for (let lane = 0; lane < 5; lane++) {
+    g.fillStyle = FRET_COLORS[lane]; g.fillText(LANE_NAMES[lane], 4 * r, lane * rh + rh * 0.7);
+    g.fillStyle = '#9aa1ab'; g.fillText(DRUM_NAMES[lane], 4 * r, (6 + lane) * rh + rh * 0.7);
+  }
+  if (drag && drag.moved) {
+    const xa = X(drag.t0), xb = X(drag.t1);
+    g.fillStyle = 'rgba(79,163,255,.15)'; g.strokeStyle = '#4fa3ff'; g.lineWidth = r;
+    g.fillRect(Math.min(xa, xb), Math.min(drag.y0, drag.y1), Math.abs(xb - xa), Math.abs(drag.y1 - drag.y0));
+    g.strokeRect(Math.min(xa, xb), Math.min(drag.y0, drag.y1), Math.abs(xb - xa), Math.abs(drag.y1 - drag.y0));
+  }
+  g.fillStyle = '#4fa3ff'; g.fillRect(w / 2 - r, 0, 2 * r, h);
+}
+// Pointer: a click on a note selects it, a click elsewhere jumps there, a drag selects everything in the box
+function notesPoint(e) {
+  const c = $('notes'), rc = c.getBoundingClientRect(), r = c.height / rc.height;
+  return {t: position() - zoom / 2 + (e.clientX - rc.left) / rc.width * zoom, y: (e.clientY - rc.top) * r, x: e.clientX, rh: c.height / NOTE_ROWS};
+}
+$('notes').onpointerdown = e => {
+  if (!edit || !edit.chart) return;
+  const p = notesPoint(e);
+  drag = {t0: p.t, t1: p.t, y0: p.y, y1: p.y, x0: p.x, moved: false, add: e.shiftKey};
+  $('notes').setPointerCapture(e.pointerId);
+};
+$('notes').onpointermove = e => {
+  if (!drag) return;
+  const p = notesPoint(e);
+  drag.t1 = p.t; drag.y1 = p.y;
+  if (Math.abs(p.x - drag.x0) > 4) drag.moved = true;
+};
+$('notes').onpointerup = e => {
+  if (!drag) return;
+  const d = drag, p = notesPoint(e);
+  drag = null;
+  if (!d.add) sel.clear();
+  if (d.moved) {
+    const ta = Math.min(d.t0, d.t1), tb = Math.max(d.t0, d.t1);
+    const ra = Math.floor(Math.min(d.y0, d.y1) / p.rh), rb = Math.floor(Math.max(d.y0, d.y1) / p.rh);
+    notesInView(ta, tb, (kind, i, n) => {
+      if (n[0] < ta) return;
+      const rows = kind === 'L' && n[1] < 0 ? [0, 1, 2, 3, 4] : [noteRow(kind, n[1])];
+      if (rows.some(row => row >= ra && row <= rb)) sel.add(kind + i);
+    });
+  } else {
+    // The nearest note in the clicked row, within a few pixels
+    const row = Math.floor(p.y / p.rh), tol = 7 * zoom / $('notes').clientWidth;
+    let best = null;
+    notesInView(p.t - tol - 10, p.t + tol, (kind, i, n) => {
+      const rows = kind === 'L' && n[1] < 0 ? [0, 1, 2, 3, 4] : [noteRow(kind, n[1])];
+      if (!rows.includes(row)) return;
+      const dist = p.t < n[0] ? n[0] - p.t : (kind === 'L' && p.t <= n[0] + n[2] ? 0 : p.t - n[0]);
+      if (dist <= tol && (!best || dist < best.dist)) best = {key: kind + i, dist};
+    });
+    if (best) { if (d.add && sel.has(best.key)) sel.delete(best.key); else sel.add(best.key); }
+    else if (!d.add) seek(p.t);
+  }
+  showNotesInfo();
+};
+
 // ---------------------------------------------------------------- section panel
 function fillSelect(el, options) { el.innerHTML = ''; for (const [v, text] of Object.entries(options)) { const o = document.createElement('option'); o.value = v; o.textContent = text; el.appendChild(o); } }
 fillSelect($('secPattern'), PATTERNS);
@@ -456,6 +596,7 @@ function draw() {
   g.fillStyle = '#ffd34d';
   for (const t of taps) if (t > t0 && t < t1) { g.beginPath(); g.moveTo(X(t), h); g.lineTo(X(t) - 5 * r, h - 9 * r); g.lineTo(X(t) + 5 * r, h - 9 * r); g.fill(); }
   g.fillStyle = '#4fa3ff'; g.fillRect(w / 2 - r, 0, 2 * r, h);
+  drawNotes(t0, t1);
 
   // Rough strip preview: flashes on the beat in the section's colours (on the chart's melody notes,
   // coloured by lane, when the song has a chart); white on drops
@@ -463,7 +604,7 @@ function draw() {
   const i = Math.max(0, firstAfter(pos) - 1), since = pos - b[i], s = sectionAt(pos), [ha, hb] = hues(s);
   let level = since < 0 ? 0 : Math.exp(-since * 6) * (isBar(i) ? 1 : 0.7);   // nothing before the first beat
   let hue = ha + (hb - ha) * ((i % 8) / 8);
-  const notes = song.chart && ['guitar', 'guitarghl', 'keys', 'bass', 'bassghl'].map(k => song.chart[k]).find(n => n && n.length);
+  const notes = edit.chart && edit.chart.lead.length ? edit.chart.lead : null;
   if (notes && (!s.pattern || s.pattern === 'notes')) {
     let lo = 0, hi = notes.length;
     while (lo < hi) { const m = (lo + hi) >> 1; if (notes[m][0] <= pos) lo = m + 1; else hi = m; }
@@ -512,6 +653,10 @@ async function openSong(id) {
   if (song.error && !song.beats) { status(song.error, true); return; }
   edit = {beats: song.beats.slice(), downbeat: song.downbeat, sections: JSON.parse(JSON.stringify(song.sections)),
           drops: JSON.parse(JSON.stringify(song.drops)), lifts: JSON.parse(JSON.stringify(song.lifts)), shift: 0};
+  const part = song.chart && LEAD_PARTS.find(k => song.chart[k] && song.chart[k].length);
+  edit.chart = song.chart ? {part: part || null, lead: part ? JSON.parse(JSON.stringify(song.chart[part])) : [],
+                              drums: JSON.parse(JSON.stringify(song.chart.drums || []))} : null;
+  sel.clear(); showNotesInfo();
   $('info').textContent = `${song.artist} – ${song.title}` + (song.edited ? ` (edited ${song.editedAt})` : ' (automatic)') +
     (song.offbeatRisk && !song.edited ? ' · check: the grid may be on the off-beat (if the clicks fall between the beats, press H)' : '') +
     (song.chart ? ` · strips play notes from ${song.chart.name} (charted by ${song.chart.charter})` : '');
@@ -542,7 +687,8 @@ async function pollLog() {
 $('song').onchange = () => openSong($('song').value);
 $('play').onclick = () => playing ? pause() : play(position());
 $('save').onclick = save;
-$('undo').onclick = () => { if (history.length) { edit = JSON.parse(history.pop()); shownSection = null; dirty = true; updateButtons(); status('Undone'); } };
+$('undo').onclick = () => { if (history.length) { edit = JSON.parse(history.pop()); shownSection = null; dirty = true; sel.clear(); showNotesInfo(); updateButtons(); status('Undone'); } };
+$('notesDelete').onclick = deleteNotes; $('notesNone').onclick = selectNone;
 $('clickVol').oninput = () => { clickGain.gain.value = +$('clickVol').value; };
 $('zoomIn').onclick = () => { zoom = Math.max(2, zoom / 1.5); };
 $('zoomOut').onclick = () => { zoom = Math.min(60, zoom * 1.5); };
@@ -573,6 +719,7 @@ document.addEventListener('keydown', e => {
     '[': () => shiftGrid(e.shiftKey ? -0.001 : -0.01), '{': () => shiftGrid(-0.001),
     ']': () => shiftGrid(e.shiftKey ? 0.001 : 0.01), '}': () => shiftGrid(0.001),
     b: setBar1, h: halfBeat, g: steadyFromAudio, d: addDrop, u: setBuild, l: addLift, s: addSection, x: deleteMark,
+    delete: deleteNotes, backspace: deleteNotes, escape: selectNone,
     '+': () => $('zoomIn').click(), '=': () => $('zoomIn').click(), '-': () => $('zoomOut').click(),
   }[k];
   if (handled) { e.preventDefault(); handled(); }
