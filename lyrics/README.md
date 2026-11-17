@@ -41,6 +41,11 @@ Options (environment variables; note `sudo VAR=value python3 ...`):
 
 ## Effects
 
+**Now: one look for every song** (`ONE_LOOK = True` in `lyrics.py`): plain white text on black, each
+new line wiping in from the bottom and pushing the old one up (`effects.Wipe`, 0.25 s); no brat theme
+and no white flash on drops (the strips still have theirs). `ONE_LOOK = False` brings back everything
+below.
+
 One effect per song, cycling in this order (the effect's name shows after the artist on the
 song info screen). All run at ~43 fps; each frame costs 3-13 ms of CPU on the Pi 3B+.
 

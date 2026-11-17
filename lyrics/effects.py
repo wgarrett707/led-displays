@@ -389,6 +389,25 @@ class Equalizer(Effect):
         return out
 
 
+class Wipe(Effect):
+    # Plain white text on black. A new line comes in from the bottom, pushing the old one up and out.
+    name = 'Wipe'
+    WHITE = (255, 255, 255)
+    TIME = 0.25     # seconds the wipe takes
+
+    def render(self, f):
+        out = np.zeros((H, W, 3), np.float32)
+        k = ease(f.age / self.TIME)
+        if k < 1:
+            dy = int(round((1 - k) * H))
+            if f.prev is not None:
+                paint(out, f.prev.moved(dy - H), self.WHITE, outline=False)
+            paint(out, f.text.moved(dy), self.WHITE, outline=False)
+        else:
+            paint(out, f.text, self.WHITE, outline=False)
+        return out
+
+
 EFFECTS = [Rainbow, Neon, Fire, Karaoke, Plasma, Glitch, Hyperspace, Equalizer]
 
 

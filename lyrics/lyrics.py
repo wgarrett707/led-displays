@@ -49,6 +49,9 @@ MATRIX_LEAD = 0.02
 DEBUG = os.environ.get('LYRICS_DEBUG') == '1'
 # LYRICS_EFFECT=<name> uses one effect for every song instead of cycling through them
 FIXED_EFFECT = os.environ.get('LYRICS_EFFECT')
+# Every song the same: white text on black, each new line wiping in from the bottom (effects.Wipe), no
+# per-song themes (brat), no white flash on drops. False brings back the cycle of effects.
+ONE_LOOK = True
 
 options = RGBMatrixOptions()
 options.rows = 32
@@ -122,6 +125,8 @@ class Lyrics:
 
 def isBrat(track):
     # Songs from brat get the album cover's look; LYRICS_EFFECT=brat gives every song that look
+    if ONE_LOOK:
+        return False
     return (FIXED_EFFECT or '').lower() == 'brat' or brat.matches(track)
 
 
@@ -285,6 +290,8 @@ CYCLE = [e for e in ALL_EFFECTS if not (SKIP_FLASHING and e in FLASHING)]
 
 
 def pickEffect(count):
+    if ONE_LOOK:
+        return effects.Wipe()
     if FIXED_EFFECT:
         for cls in ALL_EFFECTS:
             if cls.name.lower() == FIXED_EFFECT.lower():
@@ -339,7 +346,8 @@ while True:
                 effectCount += 1
                 effect = pickEffect(effectCount)
             with state.lock:
-                state.effectName = effect.name
+                # (shown on the song info screen; not when every song looks the same)
+                state.effectName = '' if ONE_LOOK else effect.name
             log('Effect: %s' % effect.name)
             screen = screenFor(state, now)
             previous, current = None, None
@@ -380,7 +388,7 @@ while True:
         effects.BEAT = beatState.beat if beatState else None
         frame = effect.render(effects.Frame(text, previous, clock, clock - keyStart, screen.progress,
                                             screen.line, dt))
-        if beatState and beatState.sinceDrop is not None and beatState.sinceDrop < 0.6:
+        if not ONE_LOOK and beatState and beatState.sinceDrop is not None and beatState.sinceDrop < 0.6:
             # A drop: one white hit over the whole panel (the strips do the strobing)
             frame += (255 - frame) * (0.8 * math.exp(-beatState.sinceDrop / 0.15))
         matrixCanvas.SetImage(Image.fromarray(effects.toBytes(frame), 'RGB'))
