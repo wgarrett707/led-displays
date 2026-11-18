@@ -60,17 +60,24 @@ def cleanTitle(title):
 
 
 def findAudio(track):
-    # Best YouTube match for the track: same length, title words present; YouTube's
-    # auto-generated "Artist - Topic" uploads are the album audio, so they're preferred
+    # Best YouTube match for the track (see findAudioOptions), or None
+    found = findAudioOptions(track)
+    return found[0] if found else None
+
+
+def findAudioOptions(track):
+    # YouTube matches for the track, best first: same length, title words present; YouTube's
+    # auto-generated "Artist - Topic" uploads are the album audio, so they're preferred. More than one,
+    # so that if the best can't be downloaded (age-restricted, say) the next can be tried.
     title, artist = cleanTitle(track['title']), track['artists'][0]
     target = track['durationMs'] / 1000
     want = set(_words(title))
-    best = None
+    found = {}
     options = {'quiet': True, 'no_warnings': True, 'extract_flat': 'in_playlist', 'skip_download': True}
     with yt_dlp.YoutubeDL(options) as ydl:
         for query in ('%s %s topic' % (artist, title), '%s - %s audio' % (artist, title), '%s %s' % (artist, title)):
             for e in ydl.extract_info('ytsearch10:' + query, download=False).get('entries') or []:
-                if not e or not e.get('duration') or not e.get('id'):
+                if not e or not e.get('duration') or not e.get('id') or e['id'] in found:
                     continue
                 off = abs(e['duration'] - target)
                 if off > DURATION_TOLERANCE:
@@ -82,17 +89,16 @@ def findAudio(track):
                     continue
                 channel = e.get('channel') or e.get('uploader') or ''
                 score = -off + (3 if channel.endswith(' - Topic') else 0) + (1 if artist.lower() in channel.lower() else 0)
-                if best is None or score > best[0]:
-                    best = (score, {'youtubeId': e['id'], 'title': name, 'channel': channel, 'duration': e['duration']})
-            if best and best[0] >= 2:
+                found[e['id']] = (score, {'youtubeId': e['id'], 'title': name, 'channel': channel, 'duration': e['duration']})
+            if found and max(s for s, _ in found.values()) >= 2:
                 break
-    return best[1] if best else None
+    return [source for score, source in sorted(found.values(), key=lambda x: -x[0])]
 
 
 def download(source, trackId):
     os.makedirs(AUDIO_DIR, exist_ok=True)
     for f in os.listdir(AUDIO_DIR):
-        if f.startswith(trackId + '.'):
+        if f.startswith(trackId + '.') and not f.endswith(('.part', '.ytdl')):
             return os.path.join(AUDIO_DIR, f)
     options = {'quiet': True, 'no_warnings': True, 'noprogress': True, 'format': 'bestaudio/best',
                'outtmpl': os.path.join(AUDIO_DIR, trackId + '.%(ext)s')}
@@ -429,12 +435,28 @@ def analyzeTrack(track, force=False):
     started = time.time()
     result = {'version': VERSION, 'id': track['id'], 'title': track['title'], 'artist': ', '.join(track['artists']),
               'durationMs': track['durationMs'], 'isrc': track.get('isrc')}
-    source = findAudio(track)
-    if not source:
+    # The best YouTube match that can actually be downloaded (some are age-restricted, for instance)
+    source, y = None, None
+    sources = findAudioOptions(track)
+    for option in sources[:5]:
+        try:
+            y = decode(download(option, track['id']))
+            source = option
+            break
+        except Exception as e:
+            log('  %s (%s): could not download it (%s), trying the next upload' % (
+                option['title'], option['youtubeId'], str(e).split(':')[-1].strip()[:80]))
+            for f in os.listdir(AUDIO_DIR):
+                if f.startswith(track['id'] + '.'):
+                    os.remove(os.path.join(AUDIO_DIR, f))     # a half-finished download
+    if not sources:
         log('%s: no YouTube upload of the same length' % name)
         result['error'] = 'no matching audio'
+    elif source is None:
+        # Recorded, so the watcher doesn't keep retrying it
+        log('%s: none of the %d matching YouTube uploads could be downloaded' % (name, min(5, len(sources))))
+        result['error'] = 'matching audio could not be downloaded'
     else:
-        y = decode(download(source, track['id']))
         bpm = deezerBpm(track)
         result.update(source=source, bpmHint=bpm, offset=0.0)
         result.update(analyze(y, bpm))
