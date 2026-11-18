@@ -64,10 +64,11 @@ class Analysis:
         # Strip effects marked in the editor, each {'type', 'time', 'end'}: 'fadeout' (the strips fade to
         # black from time to end, and stay dark), 'balls' (balls filling up the strips), and two other ways
         # of showing the chart's notes while they run: 'notepulse' (the whole strip pulses on each note)
-        # and 'notecolor' (the whole strip changes colour on each note); and 'notehype' (the chart's notes,
-        # more intense)
+        # and 'notecolor' (the whole strip changes colour on each note), 'notetoggle' (on with one note, off
+        # with the next) and 'notefret' (each note lights the part of the strip for its fret); and 'notehype'
+        # (the chart's notes, more intense)
         self.effects = [e for e in data.get('effects') or []
-                        if e.get('type') in ('fadeout', 'balls', 'notepulse', 'notecolor', 'notehype') and e['end'] > e['time']]
+                        if e.get('type') in ('fadeout', 'balls', 'notepulse', 'notecolor', 'notehype', 'notetoggle', 'notefret') and e['end'] > e['time']]
         self.env = np.frombuffer(base64.b64decode(data['env']), np.uint8).astype(np.float32) / 255
         self.envRate = data['envRate']
         # Notes from a Clone Hero chart of the song (analyze.py / charts.py), already in song time:
@@ -146,7 +147,7 @@ class BeatState:
                 self.fade = min(self.fade, max(0.0, 1 - (t - e['time']) / (e['end'] - e['time'])))
             elif e['type'] == 'balls' and e['time'] <= t < e['end']:
                 self.balls = e
-            elif e['type'] in ('notepulse', 'notecolor') and e['time'] <= t < e['end']:
+            elif e['type'] in ('notepulse', 'notecolor', 'notetoggle', 'notefret') and e['time'] <= t < e['end']:
                 self.noteStyle = e['type']
             elif e['type'] == 'notehype' and e['time'] <= t < e['end']:
                 self.hype = True

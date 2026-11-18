@@ -120,6 +120,8 @@
         <button id="fxNotePulse" title="P">Strip pulses on each note</button>
         <button id="fxNoteColor" title="C">Colour changes on each note</button>
         <button id="fxNoteHype" title="Y">Hype the notes</button>
+        <button id="fxNoteToggle" title="The strip lights up on one note and goes off on the next">On / off on alternate notes</button>
+        <button id="fxNoteFret" title="Each note lights the part of the strip for its fret (green nearest the matrix, orange at the far end), in the section's colours">Lights up by fret</button>
       </div>
       <div class="row" style="margin-top:8px">
         <label>Lasts <input type="number" id="fxLen" min="0.25" step="0.25" style="width:72px"> <span id="fxUnit"></span></label>
@@ -172,6 +174,7 @@
     <div><kbd>B</kbd> the nearest beat is bar 1 &middot; <kbd>H</kbd> half a beat &middot; <kbd>G</kbd> steady grid from the audio (marks move with the grid unless that box is unticked)</div>
     <div><kbd>D</kbd> drop, <kbd>U</kbd> build-up start, <kbd>L</kbd> lift, <kbd>S</kbd> new section</div>
     <div><kbd>F</kbd> fade out from here &middot; <kbd>O</kbd> balls fill up from here</div>
+    <div>Chart-note marks also: on / off on alternate notes (lit on one note, off on the next), and lights up by fret (green nearest the matrix, orange at the far end).</div>
     <div><kbd>P</kbd> strip pulses on each chart note &middot; <kbd>C</kbd> colour changes on each chart note &middot; <kbd>Y</kbd> hype the chart notes (to the end of the section)</div>
     <div><kbd>X</kbd> delete the nearest mark &middot; <kbd>Delete</kbd> delete the selected chart notes</div>
     <div><kbd>,</kbd> <kbd>.</kbd> the song's chart notes 10 ms earlier / later</div>
@@ -386,7 +389,7 @@ function deleteMark() {
   const t = position(), marks = [];
   edit.drops.forEach(d => { marks.push({t: d.time, kind: 'drop', ref: d}); marks.push({t: d.buildStart, kind: 'build', ref: d}); });
   edit.lifts.forEach(d => marks.push({t: d.time, kind: 'lift', ref: d}));
-  (edit.effects || []).forEach(e => marks.push({t: e.time, kind: {fadeout: 'fade-out', balls: 'balls effect', notepulse: 'pulse-on-notes mark', notecolor: 'colour-on-notes mark', notehype: 'hype-notes mark'}[e.type], ref: e}));
+  (edit.effects || []).forEach(e => marks.push({t: e.time, kind: {fadeout: 'fade-out', balls: 'balls effect', notepulse: 'pulse-on-notes mark', notecolor: 'colour-on-notes mark', notehype: 'hype-notes mark', notetoggle: 'on/off-on-notes mark', notefret: 'lit-by-fret mark'}[e.type], ref: e}));
   edit.sections.forEach((s, i) => { if (i > 0) marks.push({t: s.start, kind: 'section', ref: s}); });
   marks.sort((a, b) => Math.abs(a.t - t) - Math.abs(b.t - t));
   const m = marks[0];
@@ -657,9 +660,10 @@ $('notes').onpointerup = e => {
 // dark) and 'balls' (balls bouncing and colliding, more of them on every beat until they fill the strips;
 // strips.py Balls). A fade-out lasts to the end of the song unless shortened; balls run to the next drop
 // if there's one within 32 bars (a build-up into it), else 8 bars.
-const FX_NAMES = {fadeout: 'Fade out', balls: 'Balls fill up', notepulse: 'Strip pulses on each note', notecolor: 'Colour changes on each note', notehype: 'Hype the notes'};
-const FX_COLORS = {notepulse: '#ff7ad9', notecolor: '#ffd84d', notehype: '#ff5a3c'};
-const FX_LABELS = {notepulse: 'pulse on notes', notecolor: 'colour on notes', notehype: 'hype notes'};
+const FX_NAMES = {fadeout: 'Fade out', balls: 'Balls fill up', notepulse: 'Strip pulses on each note', notecolor: 'Colour changes on each note', notehype: 'Hype the notes',
+  notetoggle: 'On / off on alternate notes', notefret: 'Lights up by fret'};
+const FX_COLORS = {notepulse: '#ff7ad9', notecolor: '#ffd84d', notehype: '#ff5a3c', notetoggle: '#7ad4ff', notefret: '#9dff7a'};
+const FX_LABELS = {notepulse: 'pulse on notes', notecolor: 'colour on notes', notehype: 'hype notes', notetoggle: 'on/off on notes', notefret: 'lit by fret'};
 function fxIndex() {
   const t = position(), fx = edit.effects;
   let i = fx.findIndex(e => e.time <= t && t < e.end);
@@ -703,6 +707,7 @@ function showFx() {
 $('fxFade').onclick = addFade; $('fxBalls').onclick = addBalls;
 $('fxNotePulse').onclick = () => addNoteStyle('notepulse'); $('fxNoteColor').onclick = () => addNoteStyle('notecolor');
 $('fxNoteHype').onclick = () => addNoteStyle('notehype');
+$('fxNoteToggle').onclick = () => addNoteStyle('notetoggle'); $('fxNoteFret').onclick = () => addNoteStyle('notefret');
 $('fxLen').onchange = () => {
   const i = fxIndex(), v = +$('fxLen').value;
   if (!(v > 0) || i < 0) return;
@@ -1015,12 +1020,18 @@ function draw() {
   const drop = edit.drops.find(d => pos >= d.time && (pos - d.time < 0.35 || strobing(d)));
   const balls = (edit.effects || []).find(e => e.type === 'balls' && e.time <= pos && pos < e.end);
   if (balls) { const p = (pos - balls.time) / (balls.end - balls.time); light = 12 + 45 * p; sat = 85; hue = ha + (hb - ha) * ((pos * 1.7) % 1); }
-  const styleMark = !balls && edit.chart && (edit.effects || []).find(e => (e.type === 'notepulse' || e.type === 'notecolor') && e.time <= pos && pos < e.end);
+  const styleMark = !balls && edit.chart && (edit.effects || []).find(e => ['notepulse', 'notecolor', 'notetoggle', 'notefret'].includes(e.type) && e.time <= pos && pos < e.end);
   if (styleMark) {
     const list = edit.chart.lead.length ? edit.chart.lead : edit.chart.drums.filter(d => d[1] <= 1).map(d => [d[0], d[1], 0]);
     let lo = 0, hi = list.length; while (lo < hi) { const m = (lo + hi) >> 1; if (list[m][0] <= npos) lo = m + 1; else hi = m; }
     const n = list[lo - 1];
-    if (styleMark.type === 'notepulse') { const age = n ? npos - n[0] : 1e9, sw = !n ? 0 : n[2] > 0 ? Math.max(0, 1 - age / (n[2] + 0.12)) ** 1.5 : Math.exp(-age / 0.12); light = 12 + 40 * sw; hue = n && n[1] >= 0 ? ha + (hb - ha) * n[1] / 4 : ha; }
+    const fade = m => Math.exp(-(npos - m[0]) / (0.12 + 0.5 * m[2]));     // as strips.noteFade
+    if (styleMark.type === 'notepulse' || styleMark.type === 'notefret') { const sw = n ? fade(n) : 0; light = 12 + 40 * sw; hue = styleMark.type === 'notefret' || !n || n[1] < 0 ? ha : ha + (hb - ha) * n[1] / 4; }
+    else if (styleMark.type === 'notetoggle') {
+      let k = -1; for (let j = 0; j < lo; j++) if (j === 0 || Math.round(list[j][0] * 1000) !== Math.round(list[j - 1][0] * 1000)) k++;
+      const age = n ? npos - n[0] : 0, sw = k < 0 ? 0 : k % 2 === 0 ? 0.6 + 0.4 * Math.exp(-age / 0.12) : 0.6 * Math.exp(-age / 0.24);
+      light = 12 + 40 * sw; hue = n && n[1] >= 0 ? ha + (hb - ha) * n[1] / 4 : ha;
+    }
     else { light = 35; hue = n ? (n[1] < 0 ? 0 : ha + 72 * n[1]) : ha; if (n && n[1] < 0) sat = 0; }
   }
   if (s.pattern === 'off') light = 3;

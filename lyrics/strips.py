@@ -61,6 +61,10 @@ HYPE_NOTES = (5.0, 18.0, 0.55, 1.35, 0.6)
 # held note fades over its hold plus this)
 NOTE_PULSE_GLOW = 0.18
 NOTE_PULSE_FADE = 0.12
+# 'notetoggle' marks: how lit the strip stays (0-1) between the note that turns it on and the one that turns it off
+NOTE_TOGGLE_ON = 0.6
+# ... and how much of the usual background glow it keeps (0-1), so 'off' reads as off
+NOTE_TOGGLE_AMBIENT = 0.15
 # A song with no analysis yet: one of these hues (blue, violet, rose, pink), and how bright (0-1)
 WAITING_HUES = (225, 270, 328, 302)
 WAITING_LEVEL = 0.85
@@ -126,6 +130,13 @@ def quietSpans(d, total):
     st = sorted([(min(float(b), total), float(r)) for b, r in (d.get('stages') or [])
                  if min(float(b), total) > 0 and float(r) >= 0], reverse=True)
     return [(b, st[i + 1][0] if i + 1 < len(st) else 0.0) for i, (b, r) in enumerate(st) if r <= 0]
+
+
+def noteFade(age, held):
+    # How bright a note's light is (1 at the hit) 'age' seconds in: a short note fades in about a tenth of a
+    # second; a held note fades more slowly, stretched over its hold (to about 15% at its end), and keeps
+    # fading after, so it never cuts off
+    return math.exp(-age / (NOTE_PULSE_FADE + 0.5 * held))
 
 
 class Balls:
@@ -363,27 +374,56 @@ class Strips(threading.Thread):
         return hits[1]
 
     def drawNoteStyle(self, out, st, hues, level):
-        # 'notepulse': the whole strip glows dimly in the section's colours and lights up on each note: a
-        # short note is a clear hit (full, then gone in about a tenth of a second); a held note hits just as
-        # bright and fades out over the length of the hold. 'notecolor': the whole strip is
-        # one colour and changes on each note: each fret its own colour, spread round the colour wheel from
-        # the section's first colour (open notes white), crossfading in 60 ms.
+        # The strip glows dimly in the section's colours (NOTE_PULSE_GLOW) and lights up on the chart's notes.
+        # Each note hits at full brightness and fades away smoothly: a short note in about a tenth of a second,
+        # a held note more slowly, stretched over its hold (noteFade), so it never cuts off.
+        #  'notepulse': the whole strip lights up on each note.
+        #  'notetoggle': the whole strip lights up on one note and stays lit, then fades out on the next, and
+        #   so on (a chord counts as one note).
+        #  'notefret': each note lights the part of the strip for its fret: green nearest the matrix, orange
+        #   at the far end (an open note lights it all); in the section's colours, not the frets'.
+        #  'notecolor': the whole strip is one colour and changes on each note: each fret its own colour,
+        #   spread round the colour wheel from the section's first colour (open notes white), crossfading in
+        #   60 ms.
         notes = self.noteHits(self.clock.analysis)
         t = st.time
         i1 = int(np.searchsorted(notes[:, 0], t, 'right'))
-        if st.noteStyle == 'notepulse':
-            swell = 0.0
-            for t0, lane, held in notes[max(0, i1 - 16):i1]:
-                age = t - t0
-                if held > 0:
-                    swell = max(swell, max(0.0, 1 - age / (held + NOTE_PULSE_FADE)) ** 1.5)
-                else:
-                    swell = max(swell, math.exp(-age / NOTE_PULSE_FADE))
+        mix = (self.d / LONGEST)[:, None]
+        if st.noteStyle in ('notepulse', 'notetoggle', 'notefret'):
             lane = notes[i1 - 1, 1] if i1 else 0
             hue = hues[0] + (hues[1] - hues[0]) * max(0.0, lane) / 4.0
-            mix = (self.d / LONGEST)[:, None]
+            if st.noteStyle == 'notefret':
+                hue = hues[0]
             glow = (1 - mix) * rgb(hue, 0.85, 1.0) + mix * rgb(hues[1], 0.85, 1.0)
-            out += glow * (level * (NOTE_PULSE_GLOW + (1 - NOTE_PULSE_GLOW) * swell))
+            if st.noteStyle == 'notepulse':
+                swell = 0.0
+                for t0, lane, held in notes[max(0, i1 - 24):i1]:
+                    swell = max(swell, noteFade(t - t0, held))
+                out += glow * (level * (NOTE_PULSE_GLOW + (1 - NOTE_PULSE_GLOW) * swell))
+            elif st.noteStyle == 'notetoggle':
+                onsets = self.onsets(notes)
+                k = int(np.searchsorted(onsets, t, 'right')) - 1
+                if k < 0:
+                    swell = 0.0
+                elif k % 2 == 0:
+                    # On: a hit, settling to stay lit until the next note
+                    swell = NOTE_TOGGLE_ON + (1 - NOTE_TOGGLE_ON) * math.exp(-(t - onsets[k]) / NOTE_PULSE_FADE)
+                else:
+                    # Off: fades out from where it was
+                    swell = NOTE_TOGGLE_ON * math.exp(-(t - onsets[k]) / (2 * NOTE_PULSE_FADE))
+                out += glow * (level * swell)
+            else:
+                # Per fret, the brightest of its notes now; then each fret's part of the strip
+                lit = np.zeros(6)                     # frets 0-4, and open notes
+                for t0, lane, held in notes[max(0, i1 - 40):i1]:
+                    f = 5 if lane < 0 else int(lane)
+                    lit[f] = max(lit[f], noteFade(t - t0, held))
+                shape = np.full(LONGEST, lit[5], np.float32)
+                zone = LONGEST / 5.0
+                for f in range(5):
+                    if lit[f] > 0.01:
+                        shape = np.maximum(shape, lit[f] * np.exp(-((self.d - (f + 0.5) * zone) / (0.5 * zone)) ** 2))
+                out += glow * (level * (NOTE_PULSE_GLOW + (1 - NOTE_PULSE_GLOW) * shape[:, None]))
             return
 
         def color(lane):
@@ -397,6 +437,14 @@ class Strips(threading.Thread):
             c = prev * (1 - k) + color(notes[i1 - 1, 1]) * k
             accent = 0.15 * math.exp(-age / 0.15)
         out += c * (level * (0.6 + accent))
+
+    def onsets(self, notes):
+        # The distinct times notes start (a chord is one), for 'notetoggle'
+        cache = getattr(self, '_onsets', None)
+        if cache is None or cache[0] is not notes:
+            cache = (notes, np.unique(np.round(notes[:, 0], 3)))
+            self._onsets = cache
+        return cache[1]
 
     def drawBalls(self, out, st, hues, level):
         # The 'balls' effect: see Balls. Each ball has its own colour from the section's range and flashes
@@ -435,7 +483,9 @@ class Strips(threading.Thread):
         ceiling = CEILING + (1.2 - CEILING) * p
         mix = (self.d / LONGEST)[:, None]
         glow = (1 - mix) * rgb(hues[0], 0.8, 1.0) + mix * rgb(hues[1], 0.8, 1.0)
-        out = glow * (AMBIENT + AMBIENT_ENERGY * st.energy) + gain * out
+        # 'notetoggle' marks keep only a little of the glow, so 'off' looks off
+        ambient = (AMBIENT + AMBIENT_ENERGY * st.energy) * (NOTE_TOGGLE_AMBIENT if st.noteStyle == 'notetoggle' else 1.0)
+        out = glow * ambient + gain * out
         return ceiling * (1 - np.exp(-out / ceiling))
 
     def noteHue(self, hues, note):

@@ -144,7 +144,7 @@ def save(trackId, edit):
     # ('notepulse', 'notecolor'), each from 'time' to 'end'
     r['effects'] = sorted([{'type': e['type'], 'time': round(float(e['time']), 3), 'end': round(float(e['end']), 3)}
                            for e in edit.get('effects') or []
-                           if e.get('type') in ('fadeout', 'balls', 'notepulse', 'notecolor', 'notehype') and float(e['end']) > float(e['time'])],
+                           if e.get('type') in ('fadeout', 'balls', 'notepulse', 'notecolor', 'notehype', 'notetoggle', 'notefret') and float(e['end']) > float(e['time'])],
                           key=lambda e: e['time'])
     r['edited'] = True
     r['editedAt'] = time.strftime('%Y-%m-%d %H:%M')

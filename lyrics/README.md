@@ -120,7 +120,10 @@ The lights follow each song's real beat instead of assuming 120 BPM.
   so it always plays the same; by default it runs to the next drop if one is within 32 bars), and two other
   ways of showing the chart's notes while the mark runs (keys P and C, by default to the end of the
   section): 'notepulse' (the whole strip glows dimly and lights up on each note: a short note is a clear hit
-  fading in ~0.1 s, a held note hits as bright and fades out over its hold; `NOTE_PULSE_GLOW`, `NOTE_PULSE_FADE`)
+  fading in ~0.1 s, a held note fades smoothly over its hold, to ~15% at its end, never cutting off;
+  `noteFade`, `NOTE_PULSE_GLOW`, `NOTE_PULSE_FADE`), 'notetoggle' (lit on one note, fading out on the next,
+  and so on, with little background glow so off reads as off; a chord is one note; `NOTE_TOGGLE_ON`, `NOTE_TOGGLE_AMBIENT`), 'notefret' (each note lights the part of the strip for its
+  fret, green nearest the matrix, orange at the far end, in the section's colours; open notes light it all)
   and 'notecolor' (the whole strip one colour, switching on each note: a colour per fret, 72 degrees
   apart from the section's first colour, open notes white; 60 ms crossfade). Drums-only charts follow
   the kicks and snares. 'notehype' (key Y) shows the chart's notes more intensely while it runs, whatever
