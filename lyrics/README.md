@@ -124,7 +124,9 @@ The lights follow each song's real beat instead of assuming 120 BPM.
   fading in ~0.1 s, a held note fades smoothly over its hold, to ~15% at its end, never cutting off;
   `noteFade`, `NOTE_PULSE_GLOW`, `NOTE_PULSE_FADE`), 'notetoggle' (lit on one note, fading out on the next,
   and so on, with little background glow so off reads as off; a chord is one note; `NOTE_TOGGLE_ON`, `NOTE_TOGGLE_AMBIENT`), 'notefret' (each note lights the part of the strip for its
-  fret, green nearest the matrix, orange at the far end, in the section's colours; open notes light it all)
+  fret, green nearest the matrix, orange at the far end; a lit area is brighter and a paler shade 40 degrees
+  round from the section's colours, fading back into them over ~0.3 s, on half the usual background glow at
+  full contrast; open notes light it all; `NOTE_FRET_SHIFT`, `NOTE_FRET_BOOST`, `NOTE_FRET_AMBIENT`, `NOTE_FRET_FADE`)
   and 'notecolor' (the whole strip one colour, switching on each note: a colour per fret, 72 degrees
   apart from the section's first colour, open notes white; 60 ms crossfade). Drums-only charts follow
   the kicks and snares. 'notehype' (key Y) shows the chart's notes more intensely while it runs, whatever

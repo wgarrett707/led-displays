@@ -65,6 +65,13 @@ NOTE_PULSE_FADE = 0.12
 NOTE_TOGGLE_ON = 0.6
 # ... and how much of the usual background glow it keeps (0-1), so 'off' reads as off
 NOTE_TOGGLE_AMBIENT = 0.15
+# 'notefret' marks: a lit area's shade (degrees round the colour wheel from the section's colours), how much
+# brighter it hits, and how much of the usual background glow the effect keeps (0-1)
+NOTE_FRET_SHIFT = 40
+NOTE_FRET_BOOST = 1.4
+NOTE_FRET_AMBIENT = 0.5
+# ... and how long a short note's lit area takes to fade (s; a held note's is stretched over its hold too)
+NOTE_FRET_FADE = 0.3
 # A song with no analysis yet: one of these hues (blue, violet, rose, pink), and how bright (0-1)
 WAITING_HUES = (225, 270, 328, 302)
 WAITING_LEVEL = 0.85
@@ -132,11 +139,11 @@ def quietSpans(d, total):
     return [(b, st[i + 1][0] if i + 1 < len(st) else 0.0) for i, (b, r) in enumerate(st) if r <= 0]
 
 
-def noteFade(age, held):
+def noteFade(age, held, fade=None):
     # How bright a note's light is (1 at the hit) 'age' seconds in: a short note fades in about a tenth of a
     # second; a held note fades more slowly, stretched over its hold (to about 15% at its end), and keeps
     # fading after, so it never cuts off
-    return math.exp(-age / (NOTE_PULSE_FADE + 0.5 * held))
+    return math.exp(-age / ((fade or NOTE_PULSE_FADE) + 0.5 * held))
 
 
 class Balls:
@@ -417,13 +424,17 @@ class Strips(threading.Thread):
                 lit = np.zeros(6)                     # frets 0-4, and open notes
                 for t0, lane, held in notes[max(0, i1 - 40):i1]:
                     f = 5 if lane < 0 else int(lane)
-                    lit[f] = max(lit[f], noteFade(t - t0, held))
+                    lit[f] = max(lit[f], noteFade(t - t0, held, NOTE_FRET_FADE))
                 shape = np.full(LONGEST, lit[5], np.float32)
                 zone = LONGEST / 5.0
                 for f in range(5):
                     if lit[f] > 0.01:
                         shape = np.maximum(shape, lit[f] * np.exp(-((self.d - (f + 0.5) * zone) / (0.5 * zone)) ** 2))
-                out += glow * (level * (NOTE_PULSE_GLOW + (1 - NOTE_PULSE_GLOW) * shape[:, None]))
+                # A lit area is brighter and a paler shade a little round the colour wheel, fading back into the
+                # section's colour as it dims
+                accent = (1 - mix) * rgb(hues[0] + NOTE_FRET_SHIFT, 0.45, 1.0) + mix * rgb(hues[1] + NOTE_FRET_SHIFT, 0.45, 1.0)
+                k = shape[:, None]
+                out += (glow * (1 - k) + accent * k) * (level * (NOTE_PULSE_GLOW + (1 - NOTE_PULSE_GLOW) * NOTE_FRET_BOOST * k))
             return
 
         def color(lane):
@@ -477,14 +488,14 @@ class Strips(threading.Thread):
         # The glow under everything, the effects brought closer to it, and a soft limiter on top. A
         # build-up climbs back to full contrast as its drop gets close.
         p = st.build ** 2 if st.build is not None else 0.0
-        if st.hype:
-            p = 1.0     # a 'hype' mark: full contrast
+        if st.hype or st.noteStyle == 'notefret':
+            p = 1.0     # a 'hype' mark, or the strip lighting up by fret: full contrast
         gain = OVERLAY + (1 - OVERLAY) * p
         ceiling = CEILING + (1.2 - CEILING) * p
         mix = (self.d / LONGEST)[:, None]
         glow = (1 - mix) * rgb(hues[0], 0.8, 1.0) + mix * rgb(hues[1], 0.8, 1.0)
         # 'notetoggle' marks keep only a little of the glow, so 'off' looks off
-        ambient = (AMBIENT + AMBIENT_ENERGY * st.energy) * (NOTE_TOGGLE_AMBIENT if st.noteStyle == 'notetoggle' else 1.0)
+        ambient = (AMBIENT + AMBIENT_ENERGY * st.energy) * {'notetoggle': NOTE_TOGGLE_AMBIENT, 'notefret': NOTE_FRET_AMBIENT}.get(st.noteStyle, 1.0)
         out = glow * ambient + gain * out
         return ceiling * (1 - np.exp(-out / ceiling))
 
