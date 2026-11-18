@@ -363,7 +363,8 @@ def findChart(result, y, ourTitle, tries=4):
     # The analysis' 'chart': the best chart's notes in our audio's time, or None when there isn't one
     # that lines up. y: our audio (mono, SR).
     title, artist = result['title'], result['artist'].split(',')[0]
-    title = re.sub(r'\s*[\(\[][^\)\]]*\b(feat|ft|with)\.?\s[^\)\]]*[\)\]]', '', title, flags=re.I)
+    title = re.sub(r'\s*[\(\[][^\)\]]*\b(feat|featuring|ft|with)\.?\s[^\)\]]*[\)\]]', '', title, flags=re.I)
+    title = re.sub(r'\s+-\s+(feat|featuring|ft|with)\.?\s.*$', '', title, flags=re.I)
     title = re.sub(r'\s+-\s+.*(remaster|version|edit|live|mix|mono|stereo).*$', '', title, flags=re.I).strip()
     ours = oursHarmony = None
     for c in candidates(title, artist, result['durationMs'], ourTitle)[:tries]:

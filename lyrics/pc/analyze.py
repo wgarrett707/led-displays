@@ -52,7 +52,9 @@ def _words(text):
 
 def cleanTitle(title):
     # "Song (feat. X) - Remastered 2011" -> "Song"
-    title = re.sub(r'\s*[\(\[][^\)\]]*\b(feat|ft|with|vs)\.?\s[^\)\]]*[\)\]]', '', title, flags=re.I)
+    title = re.sub(r'\s*[\(\[][^\)\]]*\b(feat|featuring|ft|with|vs)\.?\s[^\)\]]*[\)\]]', '', title, flags=re.I)
+    # "Song - Featuring X" / "Song - feat. X": Spotify sometimes puts the guest after a dash
+    title = re.sub(r'\s+-\s+(feat|featuring|ft|with)\.?\s.*$', '', title, flags=re.I)
     title = re.sub(r'\s+-\s+.*(remaster|version|edit|live|mix|mono|stereo).*$', '', title, flags=re.I)
     return title.strip()
 
