@@ -299,15 +299,16 @@ function act(message, fn) {
     const n = moveMarks(before, edit.beats, gridDelta);
     if (n) message = (message ? message + '; ' : 'Grid moved; ') + n + ' mark' + (n > 1 ? 's' : '') + ' moved with it';
   }
-  gridDelta = null;
+  gridDelta = null; halfDir = null;
   changed(message);
 }
 // Marks follow the beat grid. Each mark goes with the old beat nearest it, to wherever that beat is in the
 // new grid (gridDelta: the whole grid moved by exactly this much, as with the nudges and half a beat). A beat
-// with no counterpart within 0.45 of a beat in the new grid (tempo halved, or a new grid almost exactly half
-// a beat off, where it's unclear which way to go) leaves its marks where they are. A fade-out to the end of
-// the song keeps ending there. Returns how many marks moved.
-let gridDelta = null;
+// with no counterpart within 0.45 of a beat in the new grid (tempo halved) leaves its marks where they are,
+// except when the new grid is about half a beat off the old one: then they go half a beat the way halfDir says
+// (worked out from the audio by halfWay, before the change). A fade-out to the end of the song keeps ending
+// there. Returns how many marks moved.
+let gridDelta = null, halfDir = null;
 function moveMarks(oldB, newB, delta) {
   const d = []; for (let i = 1; i < newB.length; i++) d.push(newB[i] - newB[i - 1]); d.sort((x, y) => x - y);
   const per = d[d.length >> 1] || 0.5;
@@ -316,7 +317,12 @@ function moveMarks(oldB, newB, delta) {
   const offset = t => {
     if (delta !== null && delta !== undefined) return delta;
     const ob = oldB[nearest(oldB, t)], o = newB[nearest(newB, ob)] - ob;
-    return Math.abs(o) < 0.45 * per ? o : 0;
+    if (Math.abs(o) < 0.45 * per) return o;
+    if (halfDir) {
+      const o2 = newB[nearest(newB, ob + halfDir * per / 2)] - ob;
+      if (Math.sign(o2) === halfDir && Math.abs(Math.abs(o2) - per / 2) < 0.2 * per) return o2;
+    }
+    return 0;
   };
   const end = duration();
   let moved = 0;
@@ -340,6 +346,27 @@ function moveMarks(oldB, newB, delta) {
 }
 function status(text, bad) { $('status').textContent = text || ''; $('status').className = bad ? 'bad' : ''; }
 
+// Before a new grid replaces the old one: if it's about half a beat off, which way the marks should go (-1
+// earlier, +1 later), asked of the editor's server: where the song's drops and lifts (else its section
+// starts) really hit, by the jump in loudness and bass half a beat either side. null when it isn't half off.
+async function halfWay(newB) {
+  const oldB = edit.beats, d = []; for (let i = 1; i < newB.length; i++) d.push(newB[i] - newB[i - 1]); d.sort((x, y) => x - y);
+  const per = d[d.length >> 1] || 0.5, offs = [];
+  for (let k = 0; k < oldB.length; k += 8) {
+    let lo = 0, hi = newB.length; while (lo < hi) { const m = (lo + hi) >> 1; if (newB[m] < oldB[k]) lo = m + 1; else hi = m; }
+    const near = [newB[lo - 1], newB[lo]].filter(x => x !== undefined).map(x => x - oldB[k]);
+    if (near.length) offs.push(Math.min(...near.map(Math.abs)));
+  }
+  offs.sort((x, y) => x - y);
+  if (!offs.length || offs[offs.length >> 1] < 0.4 * per) return null;
+  let times = edit.drops.map(x => x.time).concat(edit.lifts.map(x => x.time));
+  if (!times.length) times = edit.sections.slice(1).map(x => x.start);
+  if (!times.length) return null;
+  try {
+    const r = await (await fetch('/api/whichway?id=' + song.id, {method: 'POST', body: JSON.stringify({times, half: per / 2})})).json();
+    return r.dir || null;
+  } catch (e) { return null; }
+}
 function shiftGrid(s) { gridDelta = s; act(null, () => { edit.beats = edit.beats.map(b => b + s); edit.shift += s; }); }
 // Bar 1 here. Marks on the old bar lines move to the nearest new ones (1 beat later or earlier, or 2 later),
 // unless 'Marks move with the grid' is unticked; marks off the bar lines stay.
@@ -491,7 +518,10 @@ async function tapGrid() {
     beats = []; for (let k = Math.ceil(-s.a / s.period); s.a + k * s.period <= duration(); k++) beats.push(s.a + k * s.period);
     how = `${s.bpm.toFixed(2)} BPM straight from your taps (the song has no clear steady beat to line up with)`;
   }
-  act('New grid: ' + how, () => { edit.beats = beats; edit.shift = 0; setBarNear(barTime); });
+  const dir = $('marksFollow').checked ? await halfWay(beats) : null;
+  halfDir = dir;
+  act('New grid: ' + how + (dir ? ' (it is half a beat off the old one: marks went half a beat ' + (dir < 0 ? 'earlier' : 'later') + ', where the drops hit)' : ''),
+      () => { edit.beats = beats; edit.shift = 0; setBarNear(barTime); });
   taps = []; showTaps();
 }
 // The whole song as one steady grid from the audio, keeping to the beat (not the off-beat) at the playhead
@@ -501,7 +531,10 @@ async function steadyFromAudio() {
   const r = await (await fetch('/api/steady?id=' + song.id, {method: 'POST', body: JSON.stringify({bpm: 60 / period(), spread: 0.02, near})})).json();
   if (!r.beats) return status(r.error || 'Could not fit a steady beat', true);
   if (r.steady < 0.5) return status(`This song doesn't keep a steady tempo (only ${(r.steady * 100).toFixed(0)}% of it fits one), so the grid was left alone`, true);
-  act(`Steady grid at ${r.bpm.toFixed(2)} BPM (${(r.steady * 100).toFixed(0)}% of the song sits right on it)`, () => { edit.beats = r.beats; edit.shift = 0; setBarNear(barTime); });
+  const dir = $('marksFollow').checked ? await halfWay(r.beats) : null;
+  halfDir = dir;
+  act(`Steady grid at ${r.bpm.toFixed(2)} BPM (${(r.steady * 100).toFixed(0)}% of the song sits right on it)` + (dir ? '; it is half a beat off the old one: marks went half a beat ' + (dir < 0 ? 'earlier' : 'later') + ', where the drops hit' : ''),
+      () => { edit.beats = r.beats; edit.shift = 0; setBarNear(barTime); });
 }
 function halfBeat() {
   const half = period() / 2;

@@ -24,6 +24,7 @@ PEAKS_DIR = os.path.join(analyze.HERE, 'peaks')
 PEAKS_RATE = 100          # waveform points per second
 LOG = []                  # recent messages, shown in the page
 ONSETS = {}               # song id -> (audio, onset strength), for steady-grid fits
+LOUDNESS = {}             # song id -> (loudness, bass) per frame (dB), for which way marks go half a beat
 
 
 def note(message):
@@ -161,6 +162,29 @@ def save(trackId, edit):
     return {'ok': True, 'sent': sent, 'song': r}
 
 
+def whichWay(trackId, req):
+    # A new beat grid half a beat off the old one: should the marks go half a beat earlier or later? The way
+    # the song's big moments ('times': its drops and lifts, else section starts) really hit: where the
+    # loudness and bass jump up most, half a beat ('half', s) before or after each mark.
+    if trackId not in LOUDNESS:
+        y = analyze.decode(audioPath(trackId))
+        mel = analyze.librosa.feature.melspectrogram(y=y, sr=analyze.SR, hop_length=analyze.HOP, n_mels=64, fmax=8000)
+        freqs = analyze.librosa.mel_frequencies(n_mels=64, fmax=8000)
+        LOUDNESS.clear()
+        LOUDNESS[trackId] = (analyze._db(mel.sum(0)), analyze._db(mel[freqs < 160].sum(0)))
+    loud, bass = LOUDNESS[trackId]
+    frame = lambda t: max(0, min(len(loud) - 1, int(round(t * analyze.SR / analyze.HOP))))
+
+    def jump(t, w=0.35):
+        a, m, b = frame(t - w), frame(t), frame(t + w)
+        if not (a < m < b):
+            return 0.0
+        return float(loud[m:b].mean() - loud[a:m].mean() + bass[m:b].mean() - bass[a:m].mean())
+    half = float(req['half'])
+    score = sum(jump(t + half) - jump(t - half) for t in req.get('times') or [])
+    return {'dir': 1 if score > 0 else -1, 'score': round(score, 1)}
+
+
 def steady(trackId, req):
     # A steady grid fitted to the song's audio near a tempo (and beat position) from the page
     if trackId not in ONSETS:
@@ -245,6 +269,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.reply(save(q['id'], body))
             if url.path == '/api/steady':
                 return self.reply(steady(q['id'], body))
+            if url.path == '/api/whichway':
+                return self.reply(whichWay(q['id'], body))
             if url.path == '/api/analyze':
                 analyzeLinks(body.get('links', ''))
                 return self.reply({'ok': True})

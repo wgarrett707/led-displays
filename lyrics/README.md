@@ -102,8 +102,9 @@ The lights follow each song's real beat instead of assuming 120 BPM.
   taps" fits a steady tempo to the taps and lines it up exactly with the audio for the whole song (taps
   alone drift 50-300 ms by the end); H moves the grid half a beat (clicks between the beats), G refits a
   steady grid from the audio; nudge it 10 ms at a time (marks move with the grid: each with the beat it
-  sits on, unless 'Marks move with the grid' is unticked; setting bar 1 moves marks on the old bar lines to
-  the nearest new ones); tempo x2 / /2; set bar 1 (B), drops (D), build-up starts (U), lifts (L) and
+  sits on, unless 'Marks move with the grid' is unticked; a new grid about half a beat off the old one moves
+  them half a beat the way the song's drops and lifts really hit, judged from the loudness and bass jump
+  either side (`editor.whichWay`); setting bar 1 moves marks on the old bar lines to the nearest new ones); tempo x2 / /2; set bar 1 (B), drops (D), build-up starts (U), lifts (L) and
   sections (S); per drop, its build-up (Build-up panel): where it starts (bars before the drop), the speed the
   pulses fire at (speed changes "from N bars before the drop: R per beat", once a bar up to 8 per beat), in
   steps or speeding up smoothly, or quiet (rate 0: the music cuts out, no pulses and the strips go dark until
